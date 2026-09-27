@@ -8,14 +8,13 @@ import * as api from './api.js';
 // Estado da Aplicação
 // ──────────────────────────────────────────────
 const state = {
-    currentUser: null,       // { role: 'TEACHER' | 'ADMIN', teacher?: object, name: string }
+    currentUser: null,       // { role: 'TEACHER' | 'ADMIN', teacher?: object, name: string, email?: string }
     teachers: [],
     schedules: [],
     currentMonth: getCurrentYearMonth(), // 'YYYY-MM'
     teacherCheckins: [],     // Check-ins do professor logado no mês
     adminSummary: null,      // Relatório consolidado do mês
-    adminCheckins: [],       // Todos os check-ins do mês
-    selectedTeacherModal: null
+    adminCheckins: []        // Todos os check-ins do mês
 };
 
 // Dias da semana em PT-BR
@@ -78,7 +77,7 @@ async function init() {
         }
     }
 
-    // Carregar dados básicos (professores e grade)
+    // Carregar dados de professores e grade
     try {
         const [teachers, schedules] = await Promise.all([
             api.getTeachers(),
@@ -91,49 +90,6 @@ async function init() {
     }
 
     renderApp();
-}
-
-// ──────────────────────────────────────────────
-// Controle de Sessão e Autenticação
-// ──────────────────────────────────────────────
-
-async function loginTeacher(code, pin) {
-    const cleanCode = (code || '').trim().toLowerCase();
-    if (!cleanCode) {
-        showToast('Digite seu código de acesso ou selecione seu nome.', 'warning');
-        return;
-    }
-
-    try {
-        // Verificar se é senha mestre de Admin
-        if (cleanCode === 'admin' || cleanCode === 'f20729' || cleanCode === 'f20094' || cleanCode === 'f20095' || cleanCode === 'f20735') {
-            state.currentUser = {
-                role: 'ADMIN',
-                name: cleanCode === 'admin' ? 'Gestão Panobianco' : `Gestor [${cleanCode.toUpperCase()}]`
-            };
-            localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
-            showToast('✅ Bem-vindo, Gestor!', 'success');
-            renderApp();
-            return;
-        }
-
-        const teacher = await api.getTeacherByCode(cleanCode, pin);
-        if (!teacher) {
-            showToast('❌ Professor não encontrado. Verifique seu código.', 'danger');
-            return;
-        }
-
-        state.currentUser = {
-            role: 'TEACHER',
-            teacher: teacher,
-            name: teacher.short_name || teacher.name
-        };
-        localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
-        showToast(`✅ Olá, ${teacher.short_name}!`, 'success');
-        renderApp();
-    } catch (err) {
-        showToast(`❌ ${err.message || 'Erro ao realizar login.'}`, 'danger');
-    }
 }
 
 function logout() {
@@ -164,7 +120,7 @@ function renderApp() {
 }
 
 // ──────────────────────────────────────────────
-// Tela 1: Login
+// Tela 1: Login Seguro (Email & Senha / Sem Vazamento)
 // ──────────────────────────────────────────────
 
 function renderLoginView(container) {
@@ -173,55 +129,62 @@ function renderLoginView(container) {
             <div class="login-card">
                 <div class="login-header">
                     <div class="brand-badge">PANOBIANCO COLETIVAS</div>
-                    <h1>Check-in de Aulas</h1>
-                    <p>Controle de presença e fechamento mensal da grade de ginástica</p>
+                    <h1>Acesso ao Sistema</h1>
+                    <p>Controle de presença e fechamento mensal da grade de aulas</p>
                 </div>
 
                 <div class="login-tabs">
                     <button class="tab-btn active" id="tab-login-prof" onclick="app.switchLoginMode('prof')">
-                        🏋️ Sou Professor
+                        🏋️ Professor
                     </button>
                     <button class="tab-btn" id="tab-login-admin" onclick="app.switchLoginMode('admin')">
                         💼 Gestor / RH
                     </button>
                 </div>
 
-                <!-- Formulário Professor -->
+                <!-- Formulário Professor (E-mail e Senha) -->
                 <div id="form-login-prof" class="login-form-body">
-                    <div class="form-group">
-                        <label>SELECIONE SEU NOME OU DIGITE SEU CÓDIGO:</label>
-                        <select id="login-teacher-select" class="form-control" onchange="app.onSelectTeacherLogin(this.value)">
-                            <option value="">-- Escolha seu nome --</option>
-                            ${state.teachers.map(t => `
-                                <option value="${t.access_code}">${t.short_name} (${t.name})</option>
-                            `).join('')}
-                        </select>
-                    </div>
+                    <form onsubmit="event.preventDefault(); app.submitTeacherLogin();">
+                        <div class="form-group">
+                            <label>SEU E-MAIL CADASTRADO:</label>
+                            <input type="email" id="login-teacher-email" class="form-control" placeholder="ex: karina@email.com" autocomplete="email" required>
+                        </div>
 
-                    <div class="form-group" style="margin-top: 12px;">
-                        <input type="text" id="login-teacher-code" class="form-control" placeholder="Ou digite seu código (ex: karina, teco, fernanda...)" autocomplete="off">
-                    </div>
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>SUA SENHA:</label>
+                            <input type="password" id="login-teacher-password" class="form-control" placeholder="••••••••" autocomplete="current-password" required>
+                        </div>
 
-                    <div class="form-group" style="margin-top: 12px;">
-                        <label>PIN DE ACESSO (PADRÃO: 1234):</label>
-                        <input type="password" id="login-teacher-pin" class="form-control" placeholder="****" value="1234" maxlength="6">
-                    </div>
+                        <button type="submit" class="btn btn-primary btn-block" style="margin-top: 20px;">
+                            🚀 Entrar no Meu Painel
+                        </button>
+                    </form>
 
-                    <button class="btn btn-primary btn-block" style="margin-top: 20px;" onclick="app.submitTeacherLogin()">
-                        🚀 Entrar no Meu Painel
-                    </button>
+                    <div class="first-access-box">
+                        <p>Primeira vez acessando?</p>
+                        <button class="btn btn-sm btn-outline btn-block" onclick="app.openFirstAccessModal()">
+                            ✨ Criar minha senha / Primeiro Acesso
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Formulário Gestor -->
+                <!-- Formulário Gestor (Seguro • Sem vazamento de exemplos) -->
                 <div id="form-login-admin" class="login-form-body" style="display: none;">
-                    <div class="form-group">
-                        <label>CÓDIGO DE GESTOR / ADMIN:</label>
-                        <input type="text" id="login-admin-code" class="form-control" placeholder="Código (ex: admin, f20729)" autocomplete="off">
-                    </div>
+                    <form onsubmit="event.preventDefault(); app.submitAdminLogin();">
+                        <div class="form-group">
+                            <label>USUÁRIO OU E-MAIL DO GESTOR:</label>
+                            <input type="text" id="login-admin-user" class="form-control" placeholder="Usuário ou e-mail" autocomplete="username" required>
+                        </div>
 
-                    <button class="btn btn-primary btn-block" style="margin-top: 20px;" onclick="app.submitAdminLogin()">
-                        🔒 Acessar Painel do Gestor
-                    </button>
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>SENHA DE ACESSO:</label>
+                            <input type="password" id="login-admin-pass" class="form-control" placeholder="••••••••" autocomplete="current-password" required>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-block" style="margin-top: 20px;">
+                            🔒 Acessar Painel do Gestor
+                        </button>
+                    </form>
                 </div>
 
                 <div class="login-footer">
@@ -230,6 +193,58 @@ function renderLoginView(container) {
             </div>
         </div>
     `;
+}
+
+// Modal: Primeiro Acesso do Professor (Criação de E-mail e Senha)
+function openFirstAccessModal() {
+    const modalHtml = `
+        <div id="first-access-modal" class="modal-overlay active">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>✨ Primeiro Acesso • Criar Senha</h3>
+                    <button class="btn-close" onclick="app.closeModal('first-access-modal')">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 16px;">
+                        Selecione seu nome na lista oficial da academia, cadastre seu e-mail pessoal e crie uma senha segura para seus próximos acessos:
+                    </p>
+
+                    <div class="form-group">
+                        <label>QUEM É VOCÊ (PROFESSOR):</label>
+                        <select id="fa-teacher-id" class="form-control">
+                            <option value="">-- Selecione seu nome --</option>
+                            ${state.teachers.map(t => `
+                                <option value="${t.id}">${t.name} (${t.short_name})</option>
+                            `).join('')}
+                        </select>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>SEU E-MAIL PESSOAL (PARA RECEBER CONFIRMAÇÕES):</label>
+                        <input type="email" id="fa-email" class="form-control" placeholder="seu-email@gmail.com">
+                        <span style="font-size: 0.72rem; color: #94a3b8; margin-top: 3px;">
+                            Você receberá o comprovante de cada aula dada neste e-mail.
+                        </span>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>CRIE SUA SENHA (MÍNIMO 4 DÍGITOS):</label>
+                        <input type="password" id="fa-pass" class="form-control" placeholder="••••••••">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>CONFIRME SUA SENHA:</label>
+                        <input type="password" id="fa-pass-confirm" class="form-control" placeholder="••••••••">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="app.closeModal('first-access-modal')">Cancelar</button>
+                    <button class="btn btn-primary" onclick="app.confirmFirstAccess()">Criar Conta & Entrar</button>
+                </div>
+            </div>
+        </div>
+    `;
+    injectModal(modalHtml);
 }
 
 // ──────────────────────────────────────────────
@@ -242,7 +257,7 @@ async function renderTeacherDashboard(container) {
         <div class="mobile-layout">
             <header class="app-header">
                 <div class="header-left">
-                    <span class="brand-tag">PANOBIANCO</span>
+                    <span class="brand-tag">PANOBIANCO COLETIVAS</span>
                     <h2>Olá, ${teacher.short_name}! 👋</h2>
                     <p class="header-subtitle">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
                 </div>
@@ -254,25 +269,36 @@ async function renderTeacherDashboard(container) {
             </header>
 
             <main class="mobile-main">
-                <!-- Seção 1: Check-in de Hoje -->
+                <!-- Seção 1: Check-in de Aulas (SEMPRE ACESSÍVEL E VISÍVEL) -->
                 <section class="section-card today-checkin-card">
                     <div class="card-header">
-                        <h3>📍 Aulas de Hoje</h3>
+                        <h3>📍 Check-in de Aulas</h3>
                         <span class="live-dot" title="Sincronizado"></span>
                     </div>
 
                     <div id="teacher-today-classes" class="classes-list">
-                        <div class="loading-spinner">Carregando suas aulas de hoje...</div>
+                        <div class="loading-spinner">Carregando suas aulas...</div>
                     </div>
 
-                    <div style="margin-top: 14px; text-align: center;">
-                        <button class="btn btn-outline btn-block" onclick="app.openSubstitutionModal()">
-                            🔄 Cobri uma aula hoje (Substituição)
+                    <div class="quick-checkin-banner" style="margin-top: 14px; text-align: center;">
+                        <button class="btn btn-primary btn-block" style="padding: 14px; font-size: 1rem;" onclick="app.openManualTeacherCheckinModal()">
+                            📍 Registrar Check-in (Aula Avulsa ou Especial)
                         </button>
                     </div>
                 </section>
 
-                <!-- Seção 2: Resumo do Mês (PRIVACIDADE TOTAL - SEM R$) -->
+                <!-- Seção 2: Minhas Aulas na Grade Semanal -->
+                <section class="section-card my-schedules-card">
+                    <div class="card-header">
+                        <h3>📅 Minha Grade Semanal Fixa</h3>
+                        <small style="color: #ea580c; font-weight: 700;">Boituva</small>
+                    </div>
+                    <div id="teacher-weekly-schedules" class="weekly-mini-grid">
+                        <!-- Inserido dinamicamente -->
+                    </div>
+                </section>
+
+                <!-- Seção 3: Resumo do Mês (PRIVACIDADE TOTAL - SEM R$) -->
                 <section class="section-card monthly-stats-card">
                     <div class="month-selector-row">
                         <h3>Minhas Aulas em</h3>
@@ -285,11 +311,12 @@ async function renderTeacherDashboard(container) {
                     </div>
 
                     <div class="privacy-note">
-                        🔒 Os valores em R$ constam no fechamento financeiro do seu holerite/recibo via RH.
+                        🔒 Os valores em R$ constam no fechamento financeiro do seu holerite/recibo via RH.<br>
+                        📧 Você recebe um e-mail de confirmação em <strong>${teacher.email || 'seu e-mail'}</strong> a cada aula dada.
                     </div>
                 </section>
 
-                <!-- Seção 3: Histórico de Presenças do Mês -->
+                <!-- Seção 4: Histórico de Presenças do Mês -->
                 <section class="section-card history-card">
                     <h3>📜 Histórico de Presenças</h3>
                     <div id="teacher-checkin-history" class="history-list">
@@ -300,7 +327,6 @@ async function renderTeacherDashboard(container) {
         </div>
     `;
 
-    // Carregar dados dinâmicos do professor
     await loadTeacherData();
 }
 
@@ -308,28 +334,31 @@ async function loadTeacherData() {
     const teacher = state.currentUser.teacher;
     const today = new Date();
     const todayDayOfWeek = today.getDay(); // 0 a 6
-    const todayDateStr = today.toISOString().split('T')[0]; // 'YYYY-MM-DD'
+    const todayDateStr = today.toISOString().split('T')[0];
 
     try {
-        // Buscar check-ins do mês selecionado
         const checkins = await api.getCheckins(state.currentMonth, teacher.id);
         state.teacherCheckins = checkins;
 
-        // Atualizar contador do mês (SEM R$)
+        // Atualizar contador do mês (SEM NENHUM VALOR EM R$)
         const badgeEl = document.getElementById('teacher-total-classes-badge');
         if (badgeEl) {
             badgeEl.innerText = `${checkins.length}`;
         }
 
-        // Aulas de hoje na grade oficial do professor
+        // Aulas de hoje do professor
         const todaySchedules = state.schedules.filter(s => 
             s.day_of_week === todayDayOfWeek && s.default_teacher_id === teacher.id
         );
+
+        // Todas as aulas do professor na semana
+        const myAllSchedules = state.schedules.filter(s => s.default_teacher_id === teacher.id);
 
         // Check-ins já realizados hoje
         const todayDoneCheckins = checkins.filter(c => c.class_date === todayDateStr);
 
         renderTodayClassesList(todaySchedules, todayDoneCheckins, todayDateStr);
+        renderMyWeeklySchedules(myAllSchedules);
         renderTeacherHistoryList(checkins);
 
     } catch (err) {
@@ -342,18 +371,20 @@ function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
     const container = document.getElementById('teacher-today-classes');
     if (!container) return;
 
+    const dayName = new Date().toLocaleDateString('pt-BR', { weekday: 'long' });
+
     if (schedules.length === 0) {
         container.innerHTML = `
-            <div class="empty-state">
-                <p>Nenhuma aula oficial programada na sua grade para hoje (${new Date().toLocaleDateString('pt-BR', { weekday: 'long' })}).</p>
-                <small>Se você for cobrir a aula de outro professor, clique no botão de substituição abaixo.</small>
+            <div class="empty-state" style="padding: 16px 8px;">
+                <p style="font-weight: 700; color: #f8fafc; margin-bottom: 4px;">Hoje é ${dayName}.</p>
+                <p style="font-size: 0.85rem; color: #94a3b8;">Você não possui aulas programadas na grade regular para hoje.</p>
+                <small style="color: #64748b;">Se você deu um aulão, evento ou aula especial hoje, use o botão laranja abaixo.</small>
             </div>
         `;
         return;
     }
 
     container.innerHTML = schedules.map(sched => {
-        // Verificar se já deu check-in nesta aula hoje
         const isDone = doneCheckins.find(c => 
             c.class_time === sched.start_time && c.modality === sched.modality
         );
@@ -363,17 +394,41 @@ function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
                 <div class="class-time">${sched.start_time}</div>
                 <div class="class-details">
                     <span class="class-modality">${sched.modality}</span>
-                    <span class="class-role">Aula Titular</span>
+                    <span class="class-role">Aula Regular de Hoje (${dayName})</span>
                 </div>
                 <div class="class-action">
                     ${isDone ? `
-                        <span class="badge-done">✅ Presença Confirmada</span>
+                        <span class="badge-done">✅ Confirmada</span>
                     ` : `
                         <button class="btn btn-checkin" onclick="app.doCheckin('${sched.id}', '${sched.start_time}', '${sched.modality}', false)">
-                            📍 Dar Check-in
+                            📍 Confirmar Presença
                         </button>
                     `}
                 </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderMyWeeklySchedules(schedules) {
+    const container = document.getElementById('teacher-weekly-schedules');
+    if (!container) return;
+
+    if (schedules.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>Você ainda não possui aulas cadastradas na grade semanal.</p></div>`;
+        return;
+    }
+
+    container.innerHTML = schedules.map(sc => {
+        const day = DAYS_OF_WEEK.find(d => d.id === sc.day_of_week);
+        return `
+            <div class="my-sched-pill">
+                <span class="pill-day">${day ? day.short : ''}</span>
+                <span class="pill-time">${sc.start_time}</span>
+                <span class="pill-mod">${sc.modality}</span>
+                <button class="btn btn-sm btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="app.doCheckin('${sc.id}', '${sc.start_time}', '${sc.modality}', false)" title="Registrar presença nesta aula hoje">
+                    📍 Check-in
+                </button>
             </div>
         `;
     }).join('');
@@ -397,7 +452,7 @@ function renderTeacherHistoryList(checkins) {
             <div class="history-info">
                 <strong>${c.modality}</strong>
                 ${c.is_substitution ? `
-                    <span class="badge-subst">Substituição (${c.original_teacher?.short_name || 'Colega'})</span>
+                    <span class="badge-subst">Substituição aprovada pela gestão (${c.original_teacher?.short_name || 'Colega'})</span>
                 ` : `
                     <span class="badge-regular">Aula Regular</span>
                 `}
@@ -410,10 +465,7 @@ function renderTeacherHistoryList(checkins) {
     `).join('');
 }
 
-// ──────────────────────────────────────────────
-// Ações do Professor
-// ──────────────────────────────────────────────
-
+// Check-in do Professor
 async function doCheckin(scheduleId, classTime, modality, isSubstitution, originalTeacherId = null, notes = '') {
     const teacher = state.currentUser.teacher;
     const today = new Date().toISOString().split('T')[0];
@@ -430,7 +482,7 @@ async function doCheckin(scheduleId, classTime, modality, isSubstitution, origin
             notes: notes
         });
 
-        showToast(`🎉 Check-in confirmado para ${modality} às ${classTime}!`, 'success');
+        showToast(`🎉 Check-in confirmado! E-mail de confirmação enviado para ${teacher.email || 'seu e-mail'}.`, 'success');
         await loadTeacherData();
     } catch (err) {
         console.error('Erro ao realizar checkin:', err);
@@ -438,11 +490,60 @@ async function doCheckin(scheduleId, classTime, modality, isSubstitution, origin
     }
 }
 
+// Modal: Check-in Manual do Professor (Para dias sem grade ou horários especiais)
+function openManualTeacherCheckinModal() {
+    const teacher = state.currentUser.teacher;
+    const today = new Date().toISOString().split('T')[0];
+    const nowTime = new Date().toTimeString().slice(0, 5);
+
+    const modalHtml = `
+        <div id="manual-teacher-checkin-modal" class="modal-overlay active">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>📍 Registrar Check-in de Aula</h3>
+                    <button class="btn-close" onclick="app.closeModal('manual-teacher-checkin-modal')">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 14px;">
+                        Confirme os dados da aula que você ministrou para registrar sua presença:
+                    </p>
+
+                    <div class="form-group">
+                        <label>MODALIDADE DA AULA:</label>
+                        <input type="text" id="mtc-modality" class="form-control" placeholder="Ex: FitDance, Jump, Pilates, Yoga, Funcional...">
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px;">
+                        <div class="form-group">
+                            <label>DATA:</label>
+                            <input type="date" id="mtc-date" class="form-control" value="${today}">
+                        </div>
+                        <div class="form-group">
+                            <label>HORÁRIO DE INÍCIO:</label>
+                            <input type="time" id="mtc-time" class="form-control" value="${nowTime}">
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>OBSERVAÇÃO (OPCIONAL):</label>
+                        <input type="text" id="mtc-notes" class="form-control" placeholder="Ex: Aulão especial de sábado">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="app.closeModal('manual-teacher-checkin-modal')">Cancelar</button>
+                    <button class="btn btn-primary" onclick="app.confirmManualTeacherCheckin()">Confirmar Presença</button>
+                </div>
+            </div>
+        </div>
+    `;
+    injectModal(modalHtml);
+}
+
 // ──────────────────────────────────────────────
 // Tela 3: Painel do Gestor / RH
 // ──────────────────────────────────────────────
 
-let currentAdminTab = 'fechamento'; // 'fechamento', 'grade', 'professores', 'registros'
+let currentAdminTab = 'fechamento'; // 'fechamento', 'substituicao', 'grade', 'professores', 'registros', 'config'
 
 async function renderAdminDashboard(container) {
     container.innerHTML = `
@@ -451,7 +552,7 @@ async function renderAdminDashboard(container) {
                 <div class="header-left">
                     <span class="brand-tag">PANOBIANCO ACADEMIA</span>
                     <h2>Painel do Gestor • Coletivas</h2>
-                    <p class="header-subtitle">Boituva • Controle de Presenças e Folha</p>
+                    <p class="header-subtitle">Boituva • Controle de Presenças e Folha Salarial</p>
                 </div>
                 <div class="header-right">
                     <span class="admin-badge">Gestor Conectado</span>
@@ -464,6 +565,9 @@ async function renderAdminDashboard(container) {
                 <button class="tab-btn ${currentAdminTab === 'fechamento' ? 'active' : ''}" onclick="app.switchAdminTab('fechamento')">
                     📊 Fechamento do Mês
                 </button>
+                <button class="tab-btn ${currentAdminTab === 'substituicao' ? 'active' : ''}" onclick="app.switchAdminTab('substituicao')">
+                    🔄 Lançar Substituição
+                </button>
                 <button class="tab-btn ${currentAdminTab === 'grade' ? 'active' : ''}" onclick="app.switchAdminTab('grade')">
                     📅 Grade Semanal
                 </button>
@@ -472,6 +576,9 @@ async function renderAdminDashboard(container) {
                 </button>
                 <button class="tab-btn ${currentAdminTab === 'registros' ? 'active' : ''}" onclick="app.switchAdminTab('registros')">
                     📜 Todos os Check-ins
+                </button>
+                <button class="tab-btn ${currentAdminTab === 'config' ? 'active' : ''}" onclick="app.switchAdminTab('config')">
+                    ⚙️ Segurança & E-mail
                 </button>
             </nav>
 
@@ -490,19 +597,23 @@ async function loadAdminTabData() {
 
     if (currentAdminTab === 'fechamento') {
         await renderFechamentoTab(container);
+    } else if (currentAdminTab === 'substituicao') {
+        renderSubstituicaoTab(container);
     } else if (currentAdminTab === 'grade') {
         renderGradeTab(container);
     } else if (currentAdminTab === 'professores') {
         renderProfessoresTab(container);
     } else if (currentAdminTab === 'registros') {
         await renderRegistrosTab(container);
+    } else if (currentAdminTab === 'config') {
+        await renderConfigTab(container);
     }
 }
 
-// ── Aba: Fechamento do Mês (Tabela Idêntica à Planilha) ──────────────
+// ── Aba: Fechamento do Mês ──────────────────────────────────────────
 
 async function renderFechamentoTab(container) {
-    container.innerHTML = `<div class="loading-spinner">Calculando fechamento do mês ${state.currentMonth}...</div>`;
+    container.innerHTML = `<div class="loading-spinner">Calculando fechamento de ${state.currentMonth}...</div>`;
 
     try {
         const summaryData = await api.getMonthClosureSummary(state.currentMonth);
@@ -510,11 +621,10 @@ async function renderFechamentoTab(container) {
 
         container.innerHTML = `
             <div class="fechamento-container">
-                <!-- Barra de Controle do Mês e Ações -->
                 <div class="fechamento-toolbar">
                     <div class="toolbar-left">
                         <label>MÊS DE REFERÊNCIA:</label>
-                        <input type="month" id="admin-month-input" class="month-input" value="${state.currentMonth}" onchange="app.onAdminMonthChange(this.value)">
+                        <input type="month" class="month-input" value="${state.currentMonth}" onchange="app.onAdminMonthChange(this.value)">
                         <span class="month-title">${getMonthName(state.currentMonth)}</span>
                     </div>
                     <div class="toolbar-actions">
@@ -530,7 +640,7 @@ async function renderFechamentoTab(container) {
                     </div>
                 </div>
 
-                <!-- Cards de Resumo Consolidado -->
+                <!-- Cards de Resumo -->
                 <div class="metric-cards-grid">
                     <div class="m-card">
                         <div class="m-title">TOTAL DE AULAS</div>
@@ -554,11 +664,11 @@ async function renderFechamentoTab(container) {
                     </div>
                 </div>
 
-                <!-- Tabela Consolidada idêntica à do Excel -->
+                <!-- Tabela Consolidada -->
                 <div class="table-card" style="margin-top: 20px;">
                     <div class="table-header">
                         <h3>📋 Tabela de Acerto Salarial • ${getMonthName(state.currentMonth)}</h3>
-                        <small>Conferência de aulas e valores de acordo com a planilha oficial</small>
+                        <small>Conferência oficial idêntica à planilha de fechamento</small>
                     </div>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -624,6 +734,64 @@ async function renderFechamentoTab(container) {
     }
 }
 
+// ── Aba: Lançar Substituição (EXCLUSIVO GESTOR) ──────────────────────
+
+function renderSubstituicaoTab(container) {
+    const today = new Date().toISOString().split('T')[0];
+
+    container.innerHTML = `
+        <div class="subst-container" style="max-width: 650px; margin: 0 auto;">
+            <div class="table-card" style="padding: 24px;">
+                <div class="table-header" style="padding: 0 0 16px 0; margin-bottom: 20px;">
+                    <div>
+                        <h3>🔄 Registrar Substituição de Aula</h3>
+                        <p>Lançamento oficial realizado pelo gestor quando um professor cobre outro</p>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>DATA EM QUE A AULA OCORREU:</label>
+                    <input type="date" id="admin-subst-date" class="form-control" value="${today}">
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label>QUAL AULA DA GRADE FOI COBERTA (TITULAR QUE FALTOU):</label>
+                    <select id="admin-subst-schedule" class="form-control">
+                        <option value="">-- Selecione a aula na grade --</option>
+                        ${state.schedules.map(sc => {
+                            const day = DAYS_OF_WEEK.find(d => d.id === sc.day_of_week)?.short || '';
+                            return `
+                                <option value="${sc.id}" data-time="${sc.start_time}" data-modality="${sc.modality}" data-orig="${sc.default_teacher_id}">
+                                    [${day}] ${sc.start_time} — ${sc.modality} (Titular: ${sc.teacher?.name || 'Prof'})
+                                </option>
+                            `;
+                        }).join('')}
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label>PROFESSOR QUE COBRIU A AULA (VAI RECEBER O CRÉDITO):</label>
+                    <select id="admin-subst-covering-teacher" class="form-control">
+                        <option value="">-- Selecione quem deu a aula --</option>
+                        ${state.teachers.map(t => `
+                            <option value="${t.id}">${t.name} (${t.short_name})</option>
+                        `).join('')}
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label>MOTIVO / OBSERVAÇÃO DO ACORDO:</label>
+                    <input type="text" id="admin-subst-notes" class="form-control" placeholder="Ex: Titular em consulta médica, combinado previamente com a gestão">
+                </div>
+
+                <button class="btn btn-primary btn-block" style="margin-top: 24px; padding: 14px;" onclick="app.submitAdminSubstitution()">
+                    ✅ Confirmar e Creditar Substituição
+                </button>
+            </div>
+        </div>
+    `;
+}
+
 // ── Aba: Grade Semanal ──────────────────────────────────────────────
 
 function renderGradeTab(container) {
@@ -673,8 +841,8 @@ function renderProfessoresTab(container) {
             <div class="table-card">
                 <div class="table-header">
                     <div>
-                        <h3>👥 Corpo Docente • Coletivas Boituva</h3>
-                        <p>Valores por aula e formas de recebimento cadastradas</p>
+                        <h3>👥 Professores & Contas de Acesso • Boituva</h3>
+                        <p>Valores por aula, formas de pagamento e e-mails cadastrados</p>
                     </div>
                     <button class="btn btn-primary" onclick="app.openNewTeacherModal()">
                         ➕ Novo Professor
@@ -686,8 +854,8 @@ function renderProfessoresTab(container) {
                         <thead>
                             <tr>
                                 <th>Nome Completo</th>
-                                <th>Apelido / Grade</th>
-                                <th>Código Acesso</th>
+                                <th>Apelido</th>
+                                <th>E-mail de Login</th>
                                 <th class="text-right">Valor por Aula</th>
                                 <th class="text-center">Tipo de Pagamento</th>
                                 <th class="text-right">Ação</th>
@@ -698,7 +866,7 @@ function renderProfessoresTab(container) {
                                 <tr>
                                     <td><strong>${t.name}</strong></td>
                                     <td><span class="nick-tag">${t.short_name}</span></td>
-                                    <td><code>${t.access_code}</code></td>
+                                    <td>${t.email ? `<code>${t.email}</code>` : `<span style="color: #ea580c; font-size: 0.8rem;">⚠️ Não cadastrado</span>`}</td>
                                     <td class="text-right font-bold text-orange">${formatCurrency(t.rate_per_class)}</td>
                                     <td class="text-center">
                                         <span class="badge-${t.payment_method === 'HOLERITE' ? 'holerite' : 'recibo'}">
@@ -720,7 +888,7 @@ function renderProfessoresTab(container) {
     `;
 }
 
-// ── Aba: Todos os Registros (Log de Presenças) ──────────────────────
+// ── Aba: Todos os Registros ─────────────────────────────────────────
 
 async function renderRegistrosTab(container) {
     container.innerHTML = `<div class="loading-spinner">Buscando check-ins de ${state.currentMonth}...</div>`;
@@ -734,7 +902,7 @@ async function renderRegistrosTab(container) {
                     <div class="table-header">
                         <div>
                             <h3>📜 Registro Geral de Presenças • ${getMonthName(state.currentMonth)}</h3>
-                            <p>Histórico auditável de todos os check-ins realizados pelos professores</p>
+                            <p>Histórico auditável de todos os check-ins realizados</p>
                         </div>
                         <div style="display: flex; gap: 8px;">
                             <input type="month" class="month-input" value="${state.currentMonth}" onchange="app.onAdminMonthChange(this.value)">
@@ -793,63 +961,68 @@ async function renderRegistrosTab(container) {
     }
 }
 
+// ── Aba: Segurança & Configuração de E-mail ──────────────────────────
+
+async function renderConfigTab(container) {
+    container.innerHTML = `<div class="loading-spinner">Carregando configurações...</div>`;
+    try {
+        const settings = await api.getAdminSettings();
+
+        container.innerHTML = `
+            <div class="config-container" style="max-width: 600px; margin: 0 auto;">
+                <div class="table-card" style="padding: 24px;">
+                    <div class="table-header" style="padding: 0 0 16px 0; margin-bottom: 20px;">
+                        <div>
+                            <h3>⚙️ Segurança do Gestor & E-mail</h3>
+                            <p>Altere suas credenciais de acesso e a chave de envio de e-mails</p>
+                        </div>
+                    </div>
+
+                    <h4 style="color: #ea580c; margin-bottom: 12px; font-size: 0.95rem;">🔒 Credenciais do Gestor</h4>
+                    
+                    <div class="form-group">
+                        <label>USUÁRIO DO GESTOR:</label>
+                        <input type="text" id="cfg-admin-user" class="form-control" value="${settings?.admin_user || 'gestor'}">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>E-MAIL DO GESTOR:</label>
+                        <input type="email" id="cfg-admin-email" class="form-control" value="${settings?.admin_email || ''}">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>NOVA SENHA DO GESTOR:</label>
+                        <input type="password" id="cfg-admin-pass" class="form-control" placeholder="Deixe em branco para não alterar">
+                    </div>
+
+                    <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                    <h4 style="color: #ea580c; margin-bottom: 12px; font-size: 0.95rem;">📧 Envio de E-mails de Confirmação</h4>
+                    <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 14px;">
+                        O sistema envia um e-mail de confirmação aos professores a cada check-in. Você pode utilizar o serviço gratuito <strong>Resend</strong> (3.000 e-mails grátis/mês):
+                    </p>
+
+                    <div class="form-group">
+                        <label>RESEND API KEY (OPCIONAL):</label>
+                        <input type="password" id="cfg-resend-key" class="form-control" placeholder="re_123456789..." value="${settings?.resend_api_key || ''}">
+                        <small style="color: #64748b; margin-top: 4px;">Obtenha grátis em resend.com ou adicione como variável de ambiente na Vercel.</small>
+                    </div>
+
+                    <button class="btn btn-primary btn-block" style="margin-top: 24px; padding: 14px;" onclick="app.saveAdminSettings()">
+                        💾 Salvar Configurações
+                    </button>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = `<div class="error-box">Erro ao carregar configurações: ${err.message}</div>`;
+    }
+}
+
 // ──────────────────────────────────────────────
 // Modais e Diálogos de Apoio
 // ──────────────────────────────────────────────
 
-// Modal: Cobrir Aula (Substituição)
-function openSubstitutionModal() {
-    const teacher = state.currentUser?.teacher;
-    if (!teacher) return;
-
-    const modalHtml = `
-        <div id="subst-modal" class="modal-overlay active">
-            <div class="modal-card">
-                <div class="modal-header">
-                    <h3>🔄 Cobrir Aula de Colega (Substituição)</h3>
-                    <button class="btn-close" onclick="app.closeModal('subst-modal')">✕</button>
-                </div>
-                <div class="modal-body">
-                    <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 16px;">
-                        Informe qual aula da grade você ministrou no lugar do colega para contabilizarmos para você:
-                    </p>
-
-                    <div class="form-group">
-                        <label>DATA DA AULA COBERTA:</label>
-                        <input type="date" id="subst-date" class="form-control" value="${new Date().toISOString().split('T')[0]}">
-                    </div>
-
-                    <div class="form-group" style="margin-top: 12px;">
-                        <label>AULA DA GRADE QUE VOCÊ COBRIU:</label>
-                        <select id="subst-schedule" class="form-control" onchange="app.onSelectSubstSchedule(this.value)">
-                            <option value="">-- Selecione a aula na grade --</option>
-                            ${state.schedules.map(sc => {
-                                const dayName = DAYS_OF_WEEK.find(d => d.id === sc.day_of_week)?.short || '';
-                                return `
-                                    <option value="${sc.id}" data-time="${sc.start_time}" data-modality="${sc.modality}" data-orig="${sc.default_teacher_id}">
-                                        [${dayName}] ${sc.start_time} — ${sc.modality} (Titular: ${sc.teacher?.short_name || 'Colega'})
-                                    </option>
-                                `;
-                            }).join('')}
-                        </select>
-                    </div>
-
-                    <div class="form-group" style="margin-top: 12px;">
-                        <label>MOTIVO / OBSERVAÇÃO (OPCIONAL):</label>
-                        <input type="text" id="subst-notes" class="form-control" placeholder="Ex: Fernanda precisou se ausentar">
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn btn-outline" onclick="app.closeModal('subst-modal')">Cancelar</button>
-                    <button class="btn btn-primary" onclick="app.confirmSubstitution()">Confirmar Substituição</button>
-                </div>
-            </div>
-        </div>
-    `;
-    injectModal(modalHtml);
-}
-
-// Modal: Detalhes das Aulas do Professor (Gestor)
 function openTeacherClassesDetail(teacherId) {
     const summary = state.adminSummary;
     if (!summary) return;
@@ -908,7 +1081,6 @@ function openTeacherClassesDetail(teacherId) {
     injectModal(modalHtml);
 }
 
-// Modal: Nova Aula na Grade (Gestor)
 function openNewScheduleModal() {
     const modalHtml = `
         <div id="new-schedule-modal" class="modal-overlay active">
@@ -959,7 +1131,6 @@ function openNewScheduleModal() {
     injectModal(modalHtml);
 }
 
-// Modal: Cadastrar / Editar Professor (Gestor)
 function openNewTeacherModal(existingId = null) {
     const t = existingId ? state.teachers.find(item => item.id === existingId) : null;
 
@@ -984,8 +1155,13 @@ function openNewTeacherModal(existingId = null) {
                     </div>
 
                     <div class="form-group" style="margin-top: 12px;">
-                        <label>CÓDIGO DE ACESSO DO PROFESSOR:</label>
-                        <input type="text" id="tm-code" class="form-control" placeholder="Ex: karina" value="${t ? t.access_code : ''}">
+                        <label>E-MAIL PARA LOGIN & CONFIRMAÇÃO:</label>
+                        <input type="email" id="tm-email" class="form-control" placeholder="professor@email.com" value="${t?.email || ''}">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 12px;">
+                        <label>SENHA DE ACESSO DO PROFESSOR:</label>
+                        <input type="text" id="tm-pass" class="form-control" placeholder="Senha" value="${t?.password || '123456'}">
                     </div>
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
@@ -1012,7 +1188,6 @@ function openNewTeacherModal(existingId = null) {
     injectModal(modalHtml);
 }
 
-// Modal: Lançar Aula Manual (Gestor)
 function openManualCheckinModal() {
     const modalHtml = `
         <div id="manual-checkin-modal" class="modal-overlay active">
@@ -1165,54 +1340,102 @@ window.app = {
         if (formProf) formProf.style.display = mode === 'prof' ? 'block' : 'none';
         if (formAdmin) formAdmin.style.display = mode === 'admin' ? 'block' : 'none';
     },
-    onSelectTeacherLogin: (code) => {
-        const input = document.getElementById('login-teacher-code');
-        if (input && code) input.value = code;
+    openFirstAccessModal,
+    confirmFirstAccess: async () => {
+        const teacherId = document.getElementById('fa-teacher-id')?.value;
+        const email = document.getElementById('fa-email')?.value?.trim();
+        const pass = document.getElementById('fa-pass')?.value;
+        const passConfirm = document.getElementById('fa-pass-confirm')?.value;
+
+        if (!teacherId || !email || !pass) {
+            showToast('Preencha todos os campos.', 'warning');
+            return;
+        }
+
+        if (pass !== passConfirm) {
+            showToast('As senhas digitadas não coincidem.', 'danger');
+            return;
+        }
+
+        try {
+            const updated = await api.registerTeacherEmailPassword(teacherId, email, pass);
+            closeModal('first-access-modal');
+            showToast(`✅ Conta ativada com sucesso! Olá, ${updated.short_name}!`, 'success');
+
+            state.currentUser = {
+                role: 'TEACHER',
+                teacher: updated,
+                name: updated.short_name || updated.name,
+                email: updated.email
+            };
+            localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
+            renderApp();
+        } catch (err) {
+            showToast(`❌ ${err.message}`, 'danger');
+        }
     },
-    submitTeacherLogin: () => {
-        const code = document.getElementById('login-teacher-code')?.value;
-        const pin = document.getElementById('login-teacher-pin')?.value;
-        loginTeacher(code, pin);
+    submitTeacherLogin: async () => {
+        const email = document.getElementById('login-teacher-email')?.value;
+        const pass = document.getElementById('login-teacher-password')?.value;
+
+        try {
+            const teacher = await api.loginTeacherWithEmail(email, pass);
+            state.currentUser = {
+                role: 'TEACHER',
+                teacher: teacher,
+                name: teacher.short_name || teacher.name,
+                email: teacher.email
+            };
+            localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
+            showToast(`✅ Olá, ${teacher.short_name}!`, 'success');
+            renderApp();
+        } catch (err) {
+            showToast(`❌ ${err.message}`, 'danger');
+        }
     },
-    submitAdminLogin: () => {
-        const code = document.getElementById('login-admin-code')?.value;
-        loginTeacher(code || 'admin', null);
+    submitAdminLogin: async () => {
+        const user = document.getElementById('login-admin-user')?.value;
+        const pass = document.getElementById('login-admin-pass')?.value;
+
+        try {
+            const adminSession = await api.loginAdmin(user, pass);
+            state.currentUser = adminSession;
+            localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
+            showToast('✅ Acesso de Gestor confirmado!', 'success');
+            renderApp();
+        } catch (err) {
+            showToast(`❌ ${err.message}`, 'danger');
+        }
     },
     onTeacherMonthChange: (val) => {
         state.currentMonth = val;
         loadTeacherData();
     },
     doCheckin,
-    openSubstitutionModal,
-    confirmSubstitution: async () => {
-        const date = document.getElementById('subst-date')?.value;
-        const select = document.getElementById('subst-schedule');
-        const notes = document.getElementById('subst-notes')?.value;
+    openManualTeacherCheckinModal,
+    confirmManualTeacherCheckin: async () => {
+        const modality = document.getElementById('mtc-modality')?.value?.trim();
+        const date = document.getElementById('mtc-date')?.value;
+        const time = document.getElementById('mtc-time')?.value;
+        const notes = document.getElementById('mtc-notes')?.value?.trim();
 
-        if (!select || !select.value) {
-            showToast('Selecione qual aula da grade você cobriu.', 'warning');
+        if (!modality || !date || !time) {
+            showToast('Preencha a modalidade, data e horário da aula.', 'warning');
             return;
         }
-
-        const option = select.options[select.selectedIndex];
-        const time = option.getAttribute('data-time');
-        const modality = option.getAttribute('data-modality');
-        const origId = option.getAttribute('data-orig');
 
         try {
             await api.createCheckin({
                 teacherId: state.currentUser.teacher.id,
-                scheduleId: select.value,
                 classDate: date,
                 classTime: time,
                 modality: modality,
-                isSubstitution: true,
-                originalTeacherId: origId,
-                notes: notes || 'Aula de substituição'
+                isSubstitution: false,
+                notes: notes ? `Check-in avulso: ${notes}` : 'Check-in avulso do professor'
             });
 
-            closeModal('subst-modal');
-            showToast(`✅ Substituição registrada para ${modality}!`, 'success');
+            closeModal('manual-teacher-checkin-modal');
+            showToast(`🎉 Presença confirmada em ${modality}! E-mail enviado.`, 'success');
             await loadTeacherData();
         } catch (err) {
             showToast(`Erro: ${err.message}`, 'danger');
@@ -1225,6 +1448,41 @@ window.app = {
     onAdminMonthChange: (val) => {
         state.currentMonth = val;
         loadAdminTabData();
+    },
+    submitAdminSubstitution: async () => {
+        const date = document.getElementById('admin-subst-date')?.value;
+        const selectSched = document.getElementById('admin-subst-schedule');
+        const coveringTeacherId = document.getElementById('admin-subst-covering-teacher')?.value;
+        const notes = document.getElementById('admin-subst-notes')?.value?.trim();
+
+        if (!date || !selectSched?.value || !coveringTeacherId) {
+            showToast('Preencha todos os campos para registrar a substituição.', 'warning');
+            return;
+        }
+
+        const option = selectSched.options[selectSched.selectedIndex];
+        const time = option.getAttribute('data-time');
+        const modality = option.getAttribute('data-modality');
+        const origTeacherId = option.getAttribute('data-orig');
+
+        try {
+            await api.createCheckin({
+                teacherId: coveringTeacherId,
+                scheduleId: selectSched.value,
+                classDate: date,
+                classTime: time,
+                modality: modality,
+                isSubstitution: true,
+                originalTeacherId: origTeacherId,
+                notes: notes ? `Substituição aprovada pela gestão: ${notes}` : 'Substituição aprovada pela gestão'
+            });
+
+            showToast(`✅ Substituição registrada com sucesso e creditada ao professor!`, 'success');
+            currentAdminTab = 'fechamento';
+            renderAdminDashboard(document.getElementById('app-root'));
+        } catch (err) {
+            showToast(`Erro ao registrar: ${err.message}`, 'danger');
+        }
     },
     openTeacherClassesDetail,
     openNewScheduleModal,
@@ -1271,11 +1529,12 @@ window.app = {
         const id = document.getElementById('tm-id')?.value;
         const name = document.getElementById('tm-name')?.value?.trim();
         const shortName = document.getElementById('tm-short-name')?.value?.trim();
-        const code = document.getElementById('tm-code')?.value?.trim().toLowerCase();
+        const email = document.getElementById('tm-email')?.value?.trim().toLowerCase();
+        const pass = document.getElementById('tm-pass')?.value?.trim();
         const rate = Number(document.getElementById('tm-rate')?.value);
         const payment = document.getElementById('tm-payment')?.value;
 
-        if (!name || !shortName || !code || isNaN(rate)) {
+        if (!name || !shortName || isNaN(rate)) {
             showToast('Preencha os dados do professor corretamente.', 'warning');
             return;
         }
@@ -1284,10 +1543,12 @@ window.app = {
             const payload = {
                 name,
                 short_name: shortName,
-                access_code: code,
+                access_code: shortName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ''),
+                email: email || null,
                 rate_per_class: rate,
                 payment_method: payment
             };
+            if (pass) payload.password = pass;
             if (id) payload.id = id;
 
             await api.upsertTeacher(payload);
@@ -1326,6 +1587,32 @@ window.app = {
             loadAdminTabData();
         } catch (err) {
             showToast(`Erro: ${err.message}`, 'danger');
+        }
+    },
+    saveAdminSettings: async () => {
+        const adminUser = document.getElementById('cfg-admin-user')?.value?.trim();
+        const adminEmail = document.getElementById('cfg-admin-email')?.value?.trim();
+        const newPass = document.getElementById('cfg-admin-pass')?.value?.trim();
+        const resendKey = document.getElementById('cfg-resend-key')?.value?.trim();
+
+        if (!adminUser) {
+            showToast('O usuário do gestor não pode ficar em branco.', 'warning');
+            return;
+        }
+
+        try {
+            const payload = {
+                admin_user: adminUser,
+                admin_email: adminEmail,
+                resend_api_key: resendKey || null
+            };
+            if (newPass) payload.admin_password = newPass;
+
+            await api.updateAdminSettings(payload);
+            showToast('✅ Configurações e senha do gestor atualizadas com sucesso!', 'success');
+            loadAdminTabData();
+        } catch (err) {
+            showToast(`Erro ao salvar configurações: ${err.message}`, 'danger');
         }
     },
     cancelCheckin: async (id) => {
