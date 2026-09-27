@@ -89,6 +89,21 @@ export async function registerTeacherEmailPassword(teacherId, email, password) {
     return data;
 }
 
+export async function updateTeacherBiometric(teacherId, credentialId) {
+    const sb = getClient();
+    const { data, error } = await sb
+        .from('coletivas_teachers')
+        .update({
+            biometric_credential_id: credentialId
+        })
+        .eq('id', teacherId)
+        .select()
+        .single();
+
+    if (error) throw error;
+    return data;
+}
+
 export async function getAdminSettings() {
     const sb = getClient();
     const { data, error } = await sb

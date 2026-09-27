@@ -3,6 +3,17 @@
  */
 import { CONFIG } from './config.js';
 import * as api from './api.js';
+import * as biometrics from './biometrics.js';
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
 // ──────────────────────────────────────────────
 // Estado da Aplicação
@@ -124,6 +135,9 @@ function renderApp() {
 // ──────────────────────────────────────────────
 
 function renderLoginView(container) {
+    const savedBio = biometrics.getSavedBiometricCredential();
+    const hasBiometrics = savedBio && savedBio.credentialId;
+
     container.innerHTML = `
         <div class="login-container">
             <div class="login-card">
@@ -144,6 +158,19 @@ function renderLoginView(container) {
 
                 <!-- Formulário Professor (E-mail e Senha) -->
                 <div id="form-login-prof" class="login-form-body">
+                    ${hasBiometrics ? `
+                        <div class="bio-login-container">
+                            <button type="button" class="btn btn-biometric btn-block" onclick="app.loginWithBiometrics()">
+                                <span class="bio-main">👆 Entrar com Digital / Face ID</span>
+                                <span class="bio-sub">Conectado para: <strong>${escapeHtml(savedBio.teacherShortName || savedBio.teacherName)}</strong></span>
+                            </button>
+                            <div style="display: flex; align-items: center; text-align: center; margin: 16px 0; color: #64748b; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px;">
+                                <span style="flex: 1; border-bottom: 1px solid #334155;"></span>
+                                <span style="padding: 0 10px;">OU ENTRE COM E-MAIL E SENHA</span>
+                                <span style="flex: 1; border-bottom: 1px solid #334155;"></span>
+                            </div>
+                        </div>
+                    ` : ''}
                     <form onsubmit="event.preventDefault(); app.submitTeacherLogin();">
                         <div class="form-group">
                             <label>SEU E-MAIL CADASTRADO:</label>
@@ -253,13 +280,23 @@ function openFirstAccessModal() {
 
 async function renderTeacherDashboard(container) {
     const teacher = state.currentUser.teacher;
+    const isBioAvailable = await biometrics.isBiometricsAvailable();
+    const savedBio = biometrics.getSavedBiometricCredential();
+    const hasDeviceBio = savedBio && savedBio.teacherId === teacher.id;
+
     container.innerHTML = `
         <div class="mobile-layout">
             <header class="app-header">
                 <div class="header-left">
                     <span class="brand-tag">PANOBIANCO COLETIVAS</span>
-                    <h2>Olá, ${teacher.short_name}! 👋</h2>
+                    <h2>Olá, ${escapeHtml(teacher.short_name)}! 👋</h2>
                     <p class="header-subtitle">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+                    ${hasDeviceBio ? `
+                        <div style="margin-top: 4px; display: flex; align-items: center;">
+                            <span class="bio-active-tag" title="Biometria ativa neste aparelho">👆 Digital Ativa</span>
+                            <button class="btn-text-link" onclick="app.disableBiometrics()" style="font-size: 0.68rem; color: #94a3b8; text-decoration: underline; background: none; border: none; cursor: pointer; margin-left: 8px;">(Desativar)</button>
+                        </div>
+                    ` : ''}
                 </div>
                 <div class="header-right">
                     <button class="btn-logout" onclick="app.logout()" title="Sair da conta">
@@ -269,6 +306,17 @@ async function renderTeacherDashboard(container) {
             </header>
 
             <main class="mobile-main">
+                ${(isBioAvailable && !hasDeviceBio) ? `
+                    <div class="biometric-activation-banner" id="bio-banner">
+                        <div class="bio-icon">👆</div>
+                        <div class="bio-text">
+                            <strong>Ativar Login por Digital ou Face ID</strong>
+                            <p>Entre no app com apenas 1 toque na sua digital nos próximos acessos.</p>
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="app.enableBiometrics()">Ativar Agora</button>
+                    </div>
+                ` : ''}
+
                 <!-- Seção 1: Check-in de Aulas (SEMPRE ACESSÍVEL E VISÍVEL) -->
                 <section class="section-card today-checkin-card">
                     <div class="card-header">
@@ -1626,6 +1674,64 @@ window.app = {
         }
     },
     closeModal,
+    loginWithBiometrics: async () => {
+        try {
+            const bioData = await biometrics.authenticateWithBiometrics();
+            
+            let teacher = state.teachers.find(t => t.id === bioData.teacherId);
+            if (!teacher) {
+                const freshTeachers = await api.getTeachers();
+                state.teachers = freshTeachers;
+                teacher = freshTeachers.find(t => t.id === bioData.teacherId);
+            }
+
+            if (!teacher) {
+                throw new Error('Professor não encontrado no cadastro ativo.');
+            }
+
+            state.currentUser = {
+                role: 'TEACHER',
+                teacher: teacher,
+                name: teacher.short_name || teacher.name,
+                email: teacher.email
+            };
+            localStorage.setItem('panobianco_coletivas_session', JSON.stringify(state.currentUser));
+            showToast(`✅ Bem-vindo(a) via Digital, ${teacher.short_name}!`, 'success');
+            renderApp();
+        } catch (err) {
+            if (err.name === 'NotAllowedError' || err.message?.includes('cancel')) {
+                showToast('Validação biométrica cancelada.', 'info');
+            } else {
+                showToast(`❌ ${err.message}`, 'danger');
+            }
+        }
+    },
+    enableBiometrics: async () => {
+        try {
+            const teacher = state.currentUser?.teacher;
+            if (!teacher) return;
+
+            showToast('Toque no leitor de digital ou olhe para o Face ID...', 'info');
+            const credentialId = await biometrics.registerBiometrics(teacher);
+
+            await api.updateTeacherBiometric(teacher.id, credentialId);
+
+            showToast('🎉 Digital / Face ID ativado com sucesso neste celular!', 'success');
+            renderApp();
+        } catch (err) {
+            if (err.name === 'NotAllowedError' || err.message?.includes('cancel')) {
+                showToast('Ativação biométrica cancelada.', 'info');
+            } else {
+                showToast(`❌ Não foi possível ativar: ${err.message}`, 'danger');
+            }
+        }
+    },
+    disableBiometrics: async () => {
+        if (!confirm('Deseja desativar o login por digital neste celular?')) return;
+        biometrics.removeBiometrics();
+        showToast('Biometria desativada deste aparelho.', 'info');
+        renderApp();
+    },
     exportClosureCSV,
     printClosureReport,
     copyWhatsappSummary
