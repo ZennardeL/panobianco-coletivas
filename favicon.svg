@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+    <!-- Fundo Laranja Vibrante Panobianco -->
+    <rect width="512" height="512" rx="120" fill="#ea580c"/>
+    
+    <!-- Corpo do calendário -->
+    <rect x="112" y="128" width="288" height="264" rx="36" fill="#ffffff"/>
+    <!-- Cabeçalho do calendário escuro -->
+    <path d="M 112 164 A 36 36 0 0 1 148 128 L 364 128 A 36 36 0 0 1 400 164 L 400 200 L 112 200 Z" fill="#1e293b"/>
+    
+    <!-- Espirais (furos) -->
+    <rect x="160" y="88" width="36" height="72" rx="18" fill="#e2e8f0"/>
+    <rect x="316" y="88" width="36" height="72" rx="18" fill="#e2e8f0"/>
+
+    <!-- Checkmark grosso no meio representando o "Check-in" -->
+    <path d="M 200 280 L 244 324 L 328 230" fill="none" stroke="#ea580c" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
