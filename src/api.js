@@ -281,7 +281,8 @@ export async function createCheckin({
     originalTeacherId = null,
     rateApplied,
     paymentMethodApplied,
-    notes = ''
+    notes = '',
+    studentsCount = 0
 }) {
     const sb = getClient();
 
@@ -333,7 +334,8 @@ export async function createCheckin({
         status: 'CONFIRMADA',
         rate_applied: rate,
         payment_method_applied: paymentMethod,
-        notes: notes || null
+        notes: notes || null,
+        students_count: Number(studentsCount) || 0
     };
 
     const { data, error } = await sb
@@ -442,6 +444,7 @@ export async function getMonthClosureSummary(monthYearStr) {
             payment_method: t.payment_method,
             class_count: 0,
             total_amount: 0,
+            total_students: 0,
             classes: []
         };
     });
@@ -458,11 +461,13 @@ export async function getMonthClosureSummary(monthYearStr) {
                 payment_method: chk.payment_method_applied || 'RECIBO',
                 class_count: 0,
                 total_amount: 0,
+                total_students: 0,
                 classes: []
             };
         }
         summaryMap[tId].class_count += 1;
         summaryMap[tId].total_amount += Number(chk.rate_applied) || 0;
+        summaryMap[tId].total_students += Number(chk.students_count) || 0;
         summaryMap[tId].classes.push(chk);
     });
 

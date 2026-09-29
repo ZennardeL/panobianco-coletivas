@@ -448,7 +448,7 @@ function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
                     ${isDone ? `
                         <span class="badge-done">✅ Confirmada</span>
                     ` : `
-                        <button class="btn btn-checkin" onclick="app.doCheckin('${sched.id}', '${sched.start_time}', '${sched.modality}', false)">
+                        <button class="btn btn-checkin" onclick="app.openConfirmCheckinModal('${sched.id}', '${sched.start_time}', '${sched.modality}', false)">
                             📍 Confirmar Presença
                         </button>
                     `}
@@ -474,7 +474,7 @@ function renderMyWeeklySchedules(schedules) {
                 <span class="pill-day">${day ? day.short : ''}</span>
                 <span class="pill-time">${sc.start_time}</span>
                 <span class="pill-mod">${sc.modality}</span>
-                <button class="btn btn-sm btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="app.doCheckin('${sc.id}', '${sc.start_time}', '${sc.modality}', false)" title="Registrar presença nesta aula hoje">
+                <button class="btn btn-sm btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="app.openConfirmCheckinModal('${sc.id}', '${sc.start_time}', '${sc.modality}', false)" title="Registrar presença nesta aula hoje">
                     📍 Check-in
                 </button>
             </div>
@@ -514,7 +514,7 @@ function renderTeacherHistoryList(checkins) {
 }
 
 // Check-in do Professor
-async function doCheckin(scheduleId, classTime, modality, isSubstitution, originalTeacherId = null, notes = '') {
+async function doCheckin(scheduleId, classTime, modality, isSubstitution, studentsCount = 0, notes = '', originalTeacherId = null) {
     const teacher = state.currentUser.teacher;
     const today = new Date().toISOString().split('T')[0];
 
@@ -527,7 +527,8 @@ async function doCheckin(scheduleId, classTime, modality, isSubstitution, origin
             modality: modality,
             isSubstitution: isSubstitution,
             originalTeacherId: originalTeacherId,
-            notes: notes
+            notes: notes,
+            studentsCount: studentsCount
         });
 
         showToast(`🎉 Check-in confirmado! E-mail de confirmação enviado para ${teacher.email || 'seu e-mail'}.`, 'success');
@@ -536,6 +537,41 @@ async function doCheckin(scheduleId, classTime, modality, isSubstitution, origin
         console.error('Erro ao realizar checkin:', err);
         showToast(`❌ Falha no check-in: ${err.message}`, 'danger');
     }
+}
+
+function openConfirmCheckinModal(scheduleId, classTime, modality, isSubstitution) {
+    const modalHtml = `
+        <div id="confirm-checkin-modal" class="modal-overlay active">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>📍 Confirmar Presença: ${modality}</h3>
+                    <button class="btn-close" onclick="app.closeModal('confirm-checkin-modal')">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 14px;">
+                        Preencha os dados abaixo para confirmar sua aula das <strong>${classTime}</strong>.
+                    </p>
+
+                    <div class="form-group">
+                        <label>QUANTIDADE DE ALUNOS PRESENTES:</label>
+                        <input type="number" id="cc-students" class="form-control" placeholder="Ex: 15" min="0" required>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>OBSERVAÇÕES DA AULA (OPCIONAL):</label>
+                        <textarea id="cc-notes" class="form-control" rows="3" placeholder="Problemas com equipamento, alunos novos, brigas, etc..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="app.closeModal('confirm-checkin-modal')">Cancelar</button>
+                    <button class="btn btn-primary" onclick="app.confirmScheduledCheckin('${scheduleId}', '${classTime}', '${modality}', ${isSubstitution})">
+                        ✔️ Confirmar Presença
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    injectModal(modalHtml);
 }
 
 // Modal: Check-in Manual do Professor (Para dias sem grade ou horários especiais)
@@ -573,8 +609,13 @@ function openManualTeacherCheckinModal() {
                     </div>
 
                     <div class="form-group" style="margin-top: 14px;">
-                        <label>OBSERVAÇÃO (OPCIONAL):</label>
-                        <input type="text" id="mtc-notes" class="form-control" placeholder="Ex: Aulão especial de sábado">
+                        <label>QUANTIDADE DE ALUNOS PRESENTES:</label>
+                        <input type="number" id="mtc-students" class="form-control" placeholder="Ex: 15" min="0" required>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label>OBSERVAÇÕES DA AULA (OPCIONAL):</label>
+                        <textarea id="mtc-notes" class="form-control" rows="3" placeholder="Problemas com equipamento, alunos novos, brigas, etc..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -967,6 +1008,7 @@ async function renderRegistrosTab(container) {
                                     <th>Data / Hora</th>
                                     <th>Professor</th>
                                     <th>Modalidade</th>
+                                    <th>Alunos</th>
                                     <th>Tipo</th>
                                     <th>Valor Aplicado</th>
                                     <th>Ações</th>
@@ -974,7 +1016,7 @@ async function renderRegistrosTab(container) {
                             </thead>
                             <tbody>
                                 ${checkins.length === 0 ? `
-                                    <tr><td colspan="6" class="text-center">Nenhum check-in registrado neste mês.</td></tr>
+                                    <tr><td colspan="7" class="text-center">Nenhum check-in registrado neste mês.</td></tr>
                                 ` : checkins.map(c => `
                                     <tr>
                                         <td>
@@ -982,7 +1024,11 @@ async function renderRegistrosTab(container) {
                                             <span> às ${c.class_time}</span>
                                         </td>
                                         <td><strong>${c.teacher?.name || 'Professor'}</strong></td>
-                                        <td>${c.modality}</td>
+                                        <td>
+                                            ${c.modality}
+                                            ${c.notes ? `<div style="font-size: 0.75rem; color: #94a3b8; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${c.notes}">📝 ${c.notes}</div>` : ''}
+                                        </td>
+                                        <td><strong>${c.students_count || 0}</strong></td>
                                         <td>
                                             ${c.is_substitution ? `
                                                 <span class="badge-subst">Substituiu ${c.original_teacher?.short_name || 'Colega'}</span>
@@ -1308,11 +1354,11 @@ function exportClosureCSV() {
     const summary = state.adminSummary;
     if (!summary) return;
 
-    let csv = `Nome;Apelido;Quant. Aulas;Valor Unitario (R$);Valor Total (R$);Forma de Pagamento\n`;
+    let csv = `Nome;Apelido;Quant. Aulas;Quant. Alunos;Valor Unitario (R$);Valor Total (R$);Forma de Pagamento\n`;
     summary.summaryList.forEach(s => {
-        csv += `"${s.name}";"${s.short_name}";${s.class_count};"${s.rate_per_class.toFixed(2).replace('.', ',')}";"${s.total_amount.toFixed(2).replace('.', ',')}";"${s.payment_method}"\n`;
+        csv += `"${s.name}";"${s.short_name}";${s.class_count};${s.total_students};"${s.rate_per_class.toFixed(2).replace('.', ',')}";"${s.total_amount.toFixed(2).replace('.', ',')}";"${s.payment_method}"\n`;
     });
-    csv += `"TOTAL CONSOLIDADO";"";${summary.totals.totalClasses};"";"${summary.totals.totalGeneral.toFixed(2).replace('.', ',')}";""\n`;
+    csv += `"TOTAL CONSOLIDADO";"";${summary.totals.totalClasses};"";"";"${summary.totals.totalGeneral.toFixed(2).replace('.', ',')}";""\n`;
 
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -1334,7 +1380,7 @@ function copyWhatsappSummary() {
     msg += `📅 *Referência:* ${getMonthName(state.currentMonth)}\n\n`;
 
     summary.summaryList.forEach(s => {
-        msg += `• *${s.short_name}* (${s.name}): ${s.class_count} aulas x ${formatCurrency(s.rate_per_class)} = *${formatCurrency(s.total_amount)}* (${s.payment_method})\n`;
+        msg += `• *${s.short_name}* (${s.name}): ${s.class_count} aulas (${s.total_students} alunos) x ${formatCurrency(s.rate_per_class)} = *${formatCurrency(s.total_amount)}* (${s.payment_method})\n`;
     });
 
     msg += `\n📊 *RESUMO GERAL:*\n`;
@@ -1460,12 +1506,26 @@ window.app = {
         loadTeacherData();
     },
     doCheckin,
+    openConfirmCheckinModal,
+    confirmScheduledCheckin: async (scheduleId, classTime, modality, isSubstitution) => {
+        const studentsCount = document.getElementById('cc-students')?.value || 0;
+        const notes = document.getElementById('cc-notes')?.value?.trim();
+
+        if (!studentsCount || studentsCount < 0) {
+            showToast('Preencha a quantidade de alunos presentes.', 'warning');
+            return;
+        }
+
+        closeModal('confirm-checkin-modal');
+        await doCheckin(scheduleId, classTime, modality, isSubstitution, studentsCount, notes, null);
+    },
     openManualTeacherCheckinModal,
     confirmManualTeacherCheckin: async () => {
         const modality = document.getElementById('mtc-modality')?.value?.trim();
         const date = document.getElementById('mtc-date')?.value;
         const time = document.getElementById('mtc-time')?.value;
         const notes = document.getElementById('mtc-notes')?.value?.trim();
+        const studentsCount = document.getElementById('mtc-students')?.value || 0;
 
         if (!modality || !date || !time) {
             showToast('Preencha a modalidade, data e horário da aula.', 'warning');
@@ -1479,7 +1539,8 @@ window.app = {
                 classTime: time,
                 modality: modality,
                 isSubstitution: false,
-                notes: notes ? `Check-in avulso: ${notes}` : 'Check-in avulso do professor'
+                notes: notes ? `Check-in avulso: ${notes}` : 'Check-in avulso do professor',
+                studentsCount: studentsCount
             });
 
             closeModal('manual-teacher-checkin-modal');
