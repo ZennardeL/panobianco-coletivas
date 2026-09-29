@@ -1354,11 +1354,11 @@ function exportClosureCSV() {
     const summary = state.adminSummary;
     if (!summary) return;
 
-    let csv = `Nome;Apelido;Quant. Aulas;Quant. Alunos;Valor Unitario (R$);Valor Total (R$);Forma de Pagamento\n`;
+    let csv = `Nome;Apelido;Quant. Aulas;Valor Unitario (R$);Valor Total (R$);Forma de Pagamento\n`;
     summary.summaryList.forEach(s => {
-        csv += `"${s.name}";"${s.short_name}";${s.class_count};${s.total_students};"${s.rate_per_class.toFixed(2).replace('.', ',')}";"${s.total_amount.toFixed(2).replace('.', ',')}";"${s.payment_method}"\n`;
+        csv += `"${s.name}";"${s.short_name}";${s.class_count};"${s.rate_per_class.toFixed(2).replace('.', ',')}";"${s.total_amount.toFixed(2).replace('.', ',')}";"${s.payment_method}"\n`;
     });
-    csv += `"TOTAL CONSOLIDADO";"";${summary.totals.totalClasses};"";"";"${summary.totals.totalGeneral.toFixed(2).replace('.', ',')}";""\n`;
+    csv += `"TOTAL CONSOLIDADO";"";${summary.totals.totalClasses};"";"${summary.totals.totalGeneral.toFixed(2).replace('.', ',')}";""\n`;
 
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
