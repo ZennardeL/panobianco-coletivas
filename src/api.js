@@ -285,7 +285,23 @@ export async function createCheckin({
 }) {
     const sb = getClient();
 
-    // Obter dados do professor para aplicar valor e obter e-mail
+    // 1. Evitar duplicidade de check-ins (mesmo dia, mesma hora, mesmo professor e modalidade)
+    const { data: existing, error: checkErr } = await sb
+        .from('coletivas_checkins')
+        .select('id')
+        .eq('tenant_id', CONFIG.tenantId)
+        .eq('teacher_id', teacherId)
+        .eq('class_date', classDate)
+        .eq('class_time', classTime)
+        .eq('modality', modality)
+        .eq('status', 'CONFIRMADA')
+        .limit(1);
+    
+    if (existing && existing.length > 0) {
+        throw new Error('Check-in já foi realizado para esta aula hoje.');
+    }
+
+    // 2. Obter dados do professor para aplicar valor e obter e-mail
     const { data: t } = await sb
         .from('coletivas_teachers')
         .select('id, name, short_name, email, rate_per_class, payment_method')
