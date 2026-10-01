@@ -669,6 +669,9 @@ async function renderAdminDashboard(container) {
                 <button class="tab-btn ${currentAdminTab === 'config' ? 'active' : ''}" onclick="app.switchAdminTab('config')">
                     ⚙️ Segurança & E-mail
                 </button>
+                <button class="tab-btn ${currentAdminTab === 'equipe' ? 'active' : ''}" onclick="app.switchAdminTab('equipe')">
+                    🔑 Equipe & Acessos
+                </button>
             </nav>
 
             <main class="admin-main" id="admin-view-content">
@@ -696,6 +699,8 @@ async function loadAdminTabData() {
         await renderRegistrosTab(container);
     } else if (currentAdminTab === 'config') {
         await renderConfigTab(container);
+    } else if (currentAdminTab === 'equipe') {
+        await renderEquipeTab(container);
     }
 }
 
@@ -1110,6 +1115,186 @@ async function renderConfigTab(container) {
         `;
     } catch (err) {
         container.innerHTML = `<div class="error-box">Erro ao carregar configurações: ${err.message}</div>`;
+    }
+}
+
+// ── Aba: Equipe & Acessos (Gestores) ────────────────────────────────
+
+async function renderEquipeTab(container) {
+    container.innerHTML = `<div class="loading-spinner">Carregando equipe...</div>`;
+    try {
+        const admins = await api.getAdmins();
+
+        container.innerHTML = `
+            <div class="professores-container">
+                <div class="table-card">
+                    <div class="table-header">
+                        <div>
+                            <h3>🔑 Equipe & Acessos de Gestores</h3>
+                            <p>Cadastre gestores que podem acessar o painel administrativo</p>
+                        </div>
+                        <button class="btn btn-primary" onclick="app.openAdminModal()">
+                            ➕ Novo Gestor
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>E-mail de Login</th>
+                                    <th class="text-center">Status</th>
+                                    <th class="text-right">Ação</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${admins.length === 0 ? `
+                                    <tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:24px;">Nenhum gestor cadastrado ainda.</td></tr>
+                                ` : admins.map(a => `
+                                    <tr>
+                                        <td><strong>${escapeHtml(a.name)}</strong></td>
+                                        <td><code>${escapeHtml(a.email)}</code></td>
+                                        <td class="text-center">
+                                            <span class="badge-${a.active ? 'holerite' : 'recibo'}">
+                                                ${a.active ? '✅ Ativo' : '🚫 Inativo'}
+                                            </span>
+                                        </td>
+                                        <td class="text-right" style="display:flex; gap:6px; justify-content:flex-end;">
+                                            <button class="btn btn-sm btn-outline" onclick="app.openAdminModal('${a.id}')">
+                                                ✏️ Editar
+                                            </button>
+                                            <button class="btn btn-sm btn-outline" style="color:#ef4444; border-color:#ef4444;" onclick="app.deleteAdminAction('${a.id}', '${escapeHtml(a.name)}')">
+                                                🗑️
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="table-card" style="margin-top: 16px; padding: 16px;">
+                    <p style="font-size: 0.82rem; color: #94a3b8; margin: 0;">
+                        ℹ️ <strong>Gestores</strong> têm acesso total ao painel administrativo: fechamento, grade, professores, registros e configurações.
+                        Cada gestor faz login com seu próprio e-mail e senha.
+                    </p>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = `<div class="error-box">Erro ao carregar equipe: ${err.message}</div>`;
+    }
+}
+
+function openAdminModal(existingId = null) {
+    let admin = null;
+    if (existingId) {
+        // Buscar dados do admin no DOM não é ideal; vamos re-buscar da API
+        // Para simplificar, vamos usar um fetch inline
+    }
+
+    const isEdit = !!existingId;
+    const title = isEdit ? '✏️ Editar Gestor' : '➕ Novo Gestor';
+
+    const modalHtml = `
+        <div class="modal-overlay active" id="admin-modal" onclick="if(event.target===this) app.closeModal('admin-modal')">
+            <div class="modal-content" style="max-width: 480px;">
+                <div class="modal-header">
+                    <h3>${title}</h3>
+                    <button class="modal-close" onclick="app.closeModal('admin-modal')">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="admin-modal-loading" style="display: ${isEdit ? 'block' : 'none'};">
+                        <div class="loading-spinner">Carregando dados...</div>
+                    </div>
+                    <div id="admin-modal-form" style="display: ${isEdit ? 'none' : 'block'};">
+                        <input type="hidden" id="admin-modal-id" value="${existingId || ''}">
+                        
+                        <div class="form-group">
+                            <label>NOME COMPLETO:</label>
+                            <input type="text" id="admin-modal-name" class="form-control" placeholder="Ex: Maria Silva">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>E-MAIL (USADO PARA LOGIN):</label>
+                            <input type="email" id="admin-modal-email" class="form-control" placeholder="Ex: maria@panobianco.com">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>${isEdit ? 'NOVA SENHA (deixe em branco para manter)' : 'SENHA'}:</label>
+                            <input type="password" id="admin-modal-password" class="form-control" placeholder="${isEdit ? 'Manter senha atual' : 'Mínimo 4 caracteres'}">
+                        </div>
+
+                        <div id="admin-modal-error" class="error-box" style="display:none; margin-top:14px;"></div>
+
+                        <button class="btn btn-primary btn-block" style="margin-top: 20px; padding: 14px;" onclick="app.saveAdminModal()">
+                            💾 ${isEdit ? 'Salvar Alterações' : 'Cadastrar Gestor'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    injectModal(modalHtml);
+
+    // Se for edição, carregar dados do admin
+    if (isEdit) {
+        api.getAdmins().then(admins => {
+            const a = admins.find(x => x.id === existingId);
+            if (a) {
+                document.getElementById('admin-modal-name').value = a.name;
+                document.getElementById('admin-modal-email').value = a.email;
+            }
+            document.getElementById('admin-modal-loading').style.display = 'none';
+            document.getElementById('admin-modal-form').style.display = 'block';
+        });
+    }
+}
+
+async function saveAdminModal() {
+    const id = document.getElementById('admin-modal-id').value;
+    const name = document.getElementById('admin-modal-name').value.trim();
+    const email = document.getElementById('admin-modal-email').value.trim();
+    const password = document.getElementById('admin-modal-password').value.trim();
+    const errorEl = document.getElementById('admin-modal-error');
+
+    errorEl.style.display = 'none';
+
+    try {
+        if (id) {
+            // Edição
+            const updates = { name, email };
+            if (password) updates.password = password;
+            await api.updateAdmin(id, updates);
+            showToast('✅ Gestor atualizado com sucesso!', 'success');
+        } else {
+            // Criação
+            if (!password) {
+                errorEl.innerText = 'A senha é obrigatória para novos gestores.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            await api.createAdmin({ name, email, password });
+            showToast('✅ Gestor cadastrado com sucesso!', 'success');
+        }
+        closeModal('admin-modal');
+        await renderEquipeTab(document.getElementById('admin-view-content'));
+    } catch (err) {
+        errorEl.innerText = err.message;
+        errorEl.style.display = 'block';
+    }
+}
+
+async function deleteAdminAction(adminId, adminName) {
+    if (!confirm(`Tem certeza que deseja excluir o gestor "${adminName}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    try {
+        await api.deleteAdmin(adminId);
+        showToast(`🗑️ Gestor "${adminName}" excluído.`, 'info');
+        await renderEquipeTab(document.getElementById('admin-view-content'));
+    } catch (err) {
+        showToast(`❌ ${err.message}`, 'danger');
     }
 }
 
@@ -1795,7 +1980,10 @@ window.app = {
     },
     exportClosureCSV,
     printClosureReport,
-    copyWhatsappSummary
+    copyWhatsappSummary,
+    openAdminModal,
+    saveAdminModal,
+    deleteAdminAction
 };
 
 // Iniciar a aplicação

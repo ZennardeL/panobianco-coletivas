@@ -123,27 +123,114 @@ export async function loginAdmin(userOrEmail, password) {
         throw new Error('Digite o usuário/e-mail e a senha do Gestor.');
     }
 
-    const settings = await getAdminSettings();
-    if (!settings) {
-        // Fallback se não configurado
-        if ((cleanUser === 'gestor' || cleanUser === 'admin') && cleanPass === 'boituva2026') {
-            return { role: 'ADMIN', name: 'Gestor Panobianco' };
+    // 1. Buscar na tabela de gestores (novo sistema multi-admin)
+    const sb = getClient();
+    const { data: admin, error } = await sb
+        .from('coletivas_admins')
+        .select('*')
+        .eq('tenant_id', CONFIG.tenantId)
+        .ilike('email', cleanUser)
+        .eq('active', true)
+        .maybeSingle();
+
+    if (!error && admin) {
+        if (admin.password === cleanPass) {
+            return {
+                id: admin.id,
+                role: 'ADMIN',
+                name: admin.name,
+                email: admin.email
+            };
         }
-        throw new Error('Configuração de gestor não encontrada.');
+        throw new Error('Senha incorreta. Verifique suas credenciais.');
     }
 
-    const validUser = (settings.admin_user && settings.admin_user.toLowerCase() === cleanUser) ||
-                      (settings.admin_email && settings.admin_email.toLowerCase() === cleanUser);
+    // 2. Fallback: tabela coletivas_settings (compatibilidade)
+    const settings = await getAdminSettings();
+    if (settings) {
+        const validUser = (settings.admin_user && settings.admin_user.toLowerCase() === cleanUser) ||
+                          (settings.admin_email && settings.admin_email.toLowerCase() === cleanUser);
 
-    if (validUser && settings.admin_password === cleanPass) {
-        return {
-            role: 'ADMIN',
-            name: 'Gestão Panobianco Boituva',
-            email: settings.admin_email
-        };
+        if (validUser && settings.admin_password === cleanPass) {
+            return {
+                role: 'ADMIN',
+                name: 'Gestão Panobianco Boituva',
+                email: settings.admin_email
+            };
+        }
     }
 
     throw new Error('Usuário ou senha de gestor incorretos.');
+}
+
+// ──────────────────────────────────────────────
+// Gestores (CRUD)
+// ──────────────────────────────────────────────
+
+export async function getAdmins() {
+    const sb = getClient();
+    const { data, error } = await sb
+        .from('coletivas_admins')
+        .select('*')
+        .eq('tenant_id', CONFIG.tenantId)
+        .order('name');
+    if (error) throw error;
+    return data || [];
+}
+
+export async function createAdmin({ name, email, password }) {
+    const sb = getClient();
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!name || !cleanEmail || !password) throw new Error('Preencha todos os campos.');
+    if (password.length < 4) throw new Error('A senha deve ter pelo menos 4 caracteres.');
+
+    // Verificar duplicidade de email
+    const { data: existing } = await sb
+        .from('coletivas_admins')
+        .select('id')
+        .eq('tenant_id', CONFIG.tenantId)
+        .ilike('email', cleanEmail)
+        .maybeSingle();
+    if (existing) throw new Error('Este e-mail já está cadastrado para outro gestor.');
+
+    const { data, error } = await sb
+        .from('coletivas_admins')
+        .insert({ tenant_id: CONFIG.tenantId, name, email: cleanEmail, password })
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+}
+
+export async function updateAdmin(adminId, updates) {
+    const sb = getClient();
+    if (updates.email) updates.email = updates.email.trim().toLowerCase();
+    const { data, error } = await sb
+        .from('coletivas_admins')
+        .update(updates)
+        .eq('id', adminId)
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+}
+
+export async function deleteAdmin(adminId) {
+    const sb = getClient();
+    // Não permitir excluir o último gestor ativo
+    const { data: admins } = await sb
+        .from('coletivas_admins')
+        .select('id')
+        .eq('tenant_id', CONFIG.tenantId)
+        .eq('active', true);
+    if (admins && admins.length <= 1) {
+        throw new Error('Não é possível excluir o único gestor do sistema.');
+    }
+    const { error } = await sb
+        .from('coletivas_admins')
+        .delete()
+        .eq('id', adminId);
+    if (error) throw error;
 }
 
 export async function updateAdminSettings(settingsData) {
