@@ -1737,7 +1737,19 @@ window.app = {
     },
     switchAdminTab: (tab) => {
         currentAdminTab = tab;
-        renderAdminDashboard(document.getElementById('app-root'));
+        const main = document.getElementById('admin-view-content');
+        if (main) {
+            document.querySelectorAll('.admin-tabs .tab-btn').forEach(btn => {
+                const isActive = btn.getAttribute('onclick')?.includes(`'${tab}'`);
+                btn.classList.toggle('active', !!isActive);
+                if (isActive) {
+                    btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                }
+            });
+            loadAdminTabData();
+        } else {
+            renderAdminDashboard(document.getElementById('app-root'));
+        }
     },
     onAdminMonthChange: (val) => {
         state.currentMonth = val;
