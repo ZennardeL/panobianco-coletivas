@@ -654,6 +654,9 @@ async function renderAdminDashboard(container) {
                 <button class="tab-btn ${currentAdminTab === 'fechamento' ? 'active' : ''}" onclick="app.switchAdminTab('fechamento')">
                     📊 Fechamento do Mês
                 </button>
+                <button class="tab-btn ${currentAdminTab === 'dashboard' ? 'active' : ''}" onclick="app.switchAdminTab('dashboard')">
+                    📈 Dashboard & Frequência
+                </button>
                 <button class="tab-btn ${currentAdminTab === 'substituicao' ? 'active' : ''}" onclick="app.switchAdminTab('substituicao')">
                     🔄 Lançar Substituição
                 </button>
@@ -686,9 +689,12 @@ async function renderAdminDashboard(container) {
 async function loadAdminTabData() {
     const container = document.getElementById('admin-view-content');
     if (!container) return;
+    destroyDashboardCharts();
 
     if (currentAdminTab === 'fechamento') {
         await renderFechamentoTab(container);
+    } else if (currentAdminTab === 'dashboard') {
+        await renderDashboardTab(container);
     } else if (currentAdminTab === 'substituicao') {
         renderSubstituicaoTab(container);
     } else if (currentAdminTab === 'grade') {
@@ -825,6 +831,674 @@ async function renderFechamentoTab(container) {
         `;
     } catch (err) {
         container.innerHTML = `<div class="error-box">Erro ao calcular fechamento: ${err.message}</div>`;
+    }
+}
+
+// ── Aba: Dashboard de Alunos & Frequência ──────────────────────────
+
+let _dashboardScope = 'month'; // 'month' | 'all'
+let _dashboardCharts = {};
+let _currentDashboardData = null;
+
+function destroyDashboardCharts() {
+    if (_dashboardCharts) {
+        Object.keys(_dashboardCharts).forEach(key => {
+            if (_dashboardCharts[key] && typeof _dashboardCharts[key].destroy === 'function') {
+                try { _dashboardCharts[key].destroy(); } catch (e) { }
+            }
+        });
+    }
+    _dashboardCharts = {};
+}
+
+async function renderDashboardTab(container) {
+    destroyDashboardCharts();
+    container.innerHTML = `<div class="loading-spinner">Gerando métricas e gráficos de frequência...</div>`;
+
+    try {
+        const isAllScope = (_dashboardScope === 'all');
+        const targetMonth = isAllScope ? 'all' : state.currentMonth;
+        const checkins = await api.getAttendanceDashboardData(targetMonth);
+
+        // Agregações Gerais
+        const totalAulas = checkins.length;
+        const totalAlunos = checkins.reduce((sum, c) => sum + (Number(c.students_count) || 0), 0);
+        const mediaGeral = totalAulas > 0 ? (totalAlunos / totalAulas).toFixed(1) : '0';
+
+        // 1. Agregação por Modalidade
+        const modalitiesMap = {};
+        checkins.forEach(c => {
+            const mod = (c.modality || 'Outro').trim();
+            const count = Number(c.students_count) || 0;
+            if (!modalitiesMap[mod]) {
+                modalitiesMap[mod] = {
+                    name: mod,
+                    classesCount: 0,
+                    totalStudents: 0,
+                    min: count,
+                    max: count,
+                    teachers: new Set()
+                };
+            }
+            modalitiesMap[mod].classesCount += 1;
+            modalitiesMap[mod].totalStudents += count;
+            modalitiesMap[mod].max = Math.max(modalitiesMap[mod].max, count);
+            modalitiesMap[mod].min = Math.min(modalitiesMap[mod].min, count);
+            if (c.teacher?.name) modalitiesMap[mod].teachers.add(c.teacher.short_name || c.teacher.name);
+        });
+
+        const modalitiesList = Object.values(modalitiesMap).map(m => {
+            const avgNum = m.classesCount > 0 ? (m.totalStudents / m.classesCount) : 0;
+            return {
+                ...m,
+                avg: avgNum.toFixed(1),
+                avgNum,
+                teachersList: Array.from(m.teachers).join(', ') || 'Equipe'
+            };
+        });
+
+        // Ordenar pela maior média de alunos (e desempate por total de alunos)
+        modalitiesList.sort((a, b) => b.avgNum - a.avgNum || b.totalStudents - a.totalStudents);
+
+        const topModality = modalitiesList[0] || null;
+
+        // 2. Maior turma individual (Recorde)
+        let recordCheckin = null;
+        checkins.forEach(c => {
+            if (!recordCheckin || Number(c.students_count) > Number(recordCheckin.students_count)) {
+                recordCheckin = c;
+            }
+        });
+
+        // 3. Distribuição por Turno (Manhã vs Tarde/Noite)
+        let morningStudents = 0, morningClasses = 0;
+        let eveningStudents = 0, eveningClasses = 0;
+        checkins.forEach(c => {
+            const hour = parseInt((c.class_time || '').split(':')[0], 10);
+            const count = Number(c.students_count) || 0;
+            if (hour < 12) {
+                morningStudents += count;
+                morningClasses += 1;
+            } else {
+                eveningStudents += count;
+                eveningClasses += 1;
+            }
+        });
+
+        const peakTurno = eveningStudents >= morningStudents ? 'Noite' : 'Manhã';
+        const peakTurnoPct = totalAlunos > 0 ? Math.round((Math.max(eveningStudents, morningStudents) / totalAlunos) * 100) : 0;
+
+        // 4. Horários
+        const timesMap = {};
+        checkins.forEach(c => {
+            const time = c.class_time || '00:00';
+            const count = Number(c.students_count) || 0;
+            if (!timesMap[time]) {
+                timesMap[time] = { time, count: 0, total: 0 };
+            }
+            timesMap[time].count += 1;
+            timesMap[time].total += count;
+        });
+        const timesList = Object.values(timesMap).map(t => ({
+            ...t,
+            avg: (t.total / t.count).toFixed(1),
+            avgNum: t.total / t.count
+        })).sort((a, b) => a.time.localeCompare(b.time));
+
+        // 5. Dias da semana (1: Seg ... 6: Sab)
+        const daysOrder = [1, 2, 3, 4, 5, 6];
+        const dayLabels = { 1: 'Segunda', 2: 'Terça', 3: 'Quarta', 4: 'Quinta', 5: 'Sexta', 6: 'Sábado', 0: 'Domingo' };
+        const daysMap = {};
+        daysOrder.forEach(d => { daysMap[d] = { id: d, label: dayLabels[d], count: 0, total: 0 }; });
+        checkins.forEach(c => {
+            const dayNum = new Date(c.class_date + 'T12:00:00').getDay();
+            if (daysMap[dayNum]) {
+                daysMap[dayNum].count += 1;
+                daysMap[dayNum].total += Number(c.students_count) || 0;
+            }
+        });
+        const daysList = daysOrder.map(d => ({
+            ...daysMap[d],
+            avg: daysMap[d].count > 0 ? (daysMap[d].total / daysMap[d].count).toFixed(1) : 0
+        }));
+
+        // 6. Ranking de Professores por Alunos Atraídos
+        const teachersMap = {};
+        checkins.forEach(c => {
+            const tId = c.teacher_id;
+            const tName = c.teacher?.name || 'Professor';
+            const count = Number(c.students_count) || 0;
+            if (!teachersMap[tId]) {
+                teachersMap[tId] = { name: tName, classesCount: 0, totalStudents: 0 };
+            }
+            teachersMap[tId].classesCount += 1;
+            teachersMap[tId].totalStudents += count;
+        });
+        const teachersRanking = Object.values(teachersMap).map(t => ({
+            ...t,
+            avg: t.classesCount > 0 ? (t.totalStudents / t.classesCount).toFixed(1) : '0'
+        })).sort((a, b) => b.totalStudents - a.totalStudents);
+
+        // Guardar estado do dashboard para exportação CSV
+        _currentDashboardData = {
+            checkins,
+            modalitiesList,
+            totals: { totalAulas, totalAlunos, mediaGeral },
+            topModality,
+            recordCheckin,
+            peakTurno,
+            peakTurnoPct,
+            targetMonth
+        };
+
+        // Renderizar HTML
+        container.innerHTML = `
+            <div class="fechamento-container">
+                <!-- Toolbar do Dashboard -->
+                <div class="fechamento-toolbar">
+                    <div class="toolbar-left" style="flex-wrap: wrap; gap: 12px;">
+                        <label>PERÍODO ANALISADO:</label>
+                        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                            <button class="btn ${!isAllScope ? 'btn-primary' : 'btn-outline'}" style="padding: 6px 12px; font-size: 0.8rem;" onclick="app.setDashboardScope('month')">
+                                📅 Mês Selecionado
+                            </button>
+                            <button class="btn ${isAllScope ? 'btn-primary' : 'btn-outline'}" style="padding: 6px 12px; font-size: 0.8rem;" onclick="app.setDashboardScope('all')">
+                                🌐 Histórico Completo
+                            </button>
+                        </div>
+                        ${!isAllScope ? `
+                            <input type="month" class="month-input" value="${state.currentMonth}" onchange="app.onDashboardMonthChange(this.value)">
+                            <span class="month-title">${getMonthName(state.currentMonth)}</span>
+                        ` : `
+                            <span class="month-title" style="color: var(--primary);">Todo o Histórico Acumulado</span>
+                        `}
+                    </div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-outline" onclick="app.exportDashboardCSV()">
+                            📥 Baixar Relatório (CSV)
+                        </button>
+                        <button class="btn btn-outline" onclick="window.print()">
+                            🖨️ Imprimir Dashboard
+                        </button>
+                    </div>
+                </div>
+
+                ${totalAulas === 0 ? `
+                    <div class="table-card" style="padding: 48px 24px; text-align: center; color: var(--text-muted);">
+                        <div style="font-size: 3rem; margin-bottom: 12px;">📊</div>
+                        <h3 style="color: var(--text-primary); margin-bottom: 6px;">Nenhum check-in registrado neste período</h3>
+                        <p style="font-size: 0.85rem; max-width: 450px; margin: 0 auto 16px;">Não foram encontradas aulas coletivas confirmadas com registro de alunos no mês selecionado.</p>
+                        <button class="btn btn-primary" onclick="app.setDashboardScope('all')">Ver Todo o Histórico Acumulado</button>
+                    </div>
+                ` : `
+                    <!-- Cards de Resumo & KPIs -->
+                    <div class="metric-cards-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 24px;">
+                        <div class="m-card highlight">
+                            <div class="m-title">TOTAL DE ALUNOS ATENDIDOS</div>
+                            <div class="m-value text-orange">${totalAlunos} <small style="font-size: 0.85rem; font-weight: 600;">presenças</small></div>
+                            <div class="m-sub">Em ${totalAulas} aulas ministradas</div>
+                        </div>
+                        <div class="m-card">
+                            <div class="m-title">AULA MAIS POPULAR</div>
+                            <div class="m-value text-green" style="font-size: 1.35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                🏆 ${topModality ? topModality.name : '—'}
+                            </div>
+                            <div class="m-sub">${topModality ? `Média de <strong>${topModality.avg} alunos</strong> por aula` : 'Sem registros'}</div>
+                        </div>
+                        <div class="m-card">
+                            <div class="m-title">MÉDIA GERAL POR AULA</div>
+                            <div class="m-value text-blue">${mediaGeral} <small style="font-size: 0.85rem; font-weight: 600;">alunos/aula</small></div>
+                            <div class="m-sub">Taxa média de lotação</div>
+                        </div>
+                        <div class="m-card">
+                            <div class="m-title">MAIOR TURMA (RECORDE)</div>
+                            <div class="m-value" style="color: #eab308;">${recordCheckin ? recordCheckin.students_count : 0} <small style="font-size: 0.85rem; font-weight: 600;">alunos</small></div>
+                            <div class="m-sub">${recordCheckin ? `${recordCheckin.modality} (${recordCheckin.class_time})` : '—'}</div>
+                        </div>
+                        <div class="m-card">
+                            <div class="m-title">TURNO COM MAIOR PÚBLICO</div>
+                            <div class="m-value" style="color: #a855f7;">${peakTurno}</div>
+                            <div class="m-sub">${peakTurnoPct}% das presenças no período</div>
+                        </div>
+                    </div>
+
+                    <!-- Gráficos Row 1: Ranking por Média & Distribuição de Volume -->
+                    <div class="dashboard-grid">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <h4>📊 Ranking de Popularidade (Média de Alunos por Aula)</h4>
+                                    <p>Identifica quais modalidades enchem mais a sala de aula</p>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="chart-modalities-avg"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <h4>🍩 Participação no Volume Total de Alunos</h4>
+                                    <p>Fatia de presença de cada modalidade no período</p>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="chart-modalities-pie"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Gráficos Row 2: Ocupação por Horário & Dia da Semana -->
+                    <div class="dashboard-grid">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <h4>⏰ Ocupação Média por Horário da Grade</h4>
+                                    <p>Média de alunos presentes de acordo com o horário da aula</p>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="chart-times-bar"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <h4>📅 Frequência Média por Dia da Semana</h4>
+                                    <p>Quais dias da semana têm maior movimentação de alunos</p>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="chart-days-bar"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabela Analítica Completa -->
+                    <div class="table-card" style="margin-top: 24px;">
+                        <div class="table-header">
+                            <div>
+                                <h3>🏆 Tabela de Ocupação & Popularidade das Aulas</h3>
+                                <p>Consolidado detalhado de alunos, recordes e professores por aula</p>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 60px; text-align: center;">Pos.</th>
+                                        <th>Modalidade</th>
+                                        <th style="text-align: center;">Aulas Dadas</th>
+                                        <th style="text-align: center;">Total Alunos</th>
+                                        <th style="min-width: 180px;">Média / Lotação</th>
+                                        <th style="text-align: center;">Recorde (Pico)</th>
+                                        <th>Professores</th>
+                                        <th style="text-align: center;">Status de Procura</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${renderRankingTableRows(modalitiesList)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Box de Insights & Oportunidades para a Gestão -->
+                    <div class="insights-card">
+                        <div class="insights-header">
+                            <span style="font-size: 1.6rem;">💡</span>
+                            <div>
+                                <h3>Diagnóstico Estratégico & Insights para a Gestão</h3>
+                                <p style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 2px;">
+                                    Análise automática baseada no histórico real de presença dos alunos
+                                </p>
+                            </div>
+                        </div>
+                        <div class="insights-grid">
+                            ${renderInsightsBoxes(modalitiesList, recordCheckin, peakTurno, peakTurnoPct, teachersRanking)}
+                        </div>
+                    </div>
+                `}
+            </div>
+        `;
+
+        if (totalAulas > 0) {
+            initDashboardCharts(modalitiesList, timesList, daysList);
+        }
+    } catch (err) {
+        console.error('Erro ao renderizar dashboard:', err);
+        container.innerHTML = `
+            <div class="table-card" style="padding: 24px; text-align: center;">
+                <p style="color: #ef4444; font-weight: 700;">Erro ao carregar o dashboard: ${escapeHtml(err.message)}</p>
+                <button class="btn btn-outline" style="margin-top: 12px;" onclick="app.switchAdminTab('dashboard')">Tentar Novamente</button>
+            </div>
+        `;
+    }
+}
+
+function renderRankingTableRows(modalitiesList) {
+    if (!modalitiesList.length) return '<tr><td colspan="8" class="text-center">Nenhum dado disponível.</td></tr>';
+
+    const maxAvg = Math.max(...modalitiesList.map(m => m.avgNum), 1);
+
+    return modalitiesList.map((m, index) => {
+        const pos = index + 1;
+        let posBadge = `<span class="rank-podium rank-other">#${pos}</span>`;
+        if (pos === 1) posBadge = `<span class="rank-podium rank-1" title="1º Lugar - Aula Mais Popular">🥇</span>`;
+        else if (pos === 2) posBadge = `<span class="rank-podium rank-2" title="2º Lugar">🥈</span>`;
+        else if (pos === 3) posBadge = `<span class="rank-podium rank-3" title="3º Lugar">🥉</span>`;
+
+        let statusBadge = '';
+        let barColor = '#3b82f6';
+        if (m.avgNum >= 18) {
+            statusBadge = `<span class="badge-lota-alta">🔥 Altíssima Procura</span>`;
+            barColor = '#ea580c';
+        } else if (m.avgNum >= 12) {
+            statusBadge = `<span class="badge-lota-boa">⭐ Alta Frequência</span>`;
+            barColor = '#10b981';
+        } else if (m.avgNum >= 8) {
+            statusBadge = `<span class="badge-lota-regular">👍 Boa Ocupação</span>`;
+            barColor = '#3b82f6';
+        } else {
+            statusBadge = `<span class="badge-lota-baixa">⚠️ Baixa Procura</span>`;
+            barColor = '#ef4444';
+        }
+
+        const pct = Math.min(100, Math.round((m.avgNum / maxAvg) * 100));
+
+        return `
+            <tr>
+                <td style="text-align: center;">${posBadge}</td>
+                <td>
+                    <strong style="color: #ffffff; font-size: 0.95rem;">${escapeHtml(m.name)}</strong>
+                </td>
+                <td style="text-align: center; font-weight: 700;">${m.classesCount}</td>
+                <td style="text-align: center; font-weight: 800; color: #ffffff;">${m.totalStudents}</td>
+                <td>
+                    <div class="occupancy-bar-container">
+                        <div class="occupancy-bar-bg">
+                            <div class="occupancy-bar-fill" style="width: ${pct}%; background: ${barColor};"></div>
+                        </div>
+                        <span class="occupancy-bar-val" style="color: ${barColor};">${m.avg}</span>
+                    </div>
+                </td>
+                <td style="text-align: center;">
+                    <span style="font-weight: 800; color: #eab308;">${m.max} un</span>
+                    <small style="color: var(--text-muted); display: block; font-size: 0.7rem;">mín: ${m.min}</small>
+                </td>
+                <td style="font-size: 0.82rem; color: var(--text-secondary);">
+                    ${escapeHtml(m.teachersList)}
+                </td>
+                <td style="text-align: center;">
+                    ${statusBadge}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function renderInsightsBoxes(modalitiesList, recordCheckin, peakTurno, peakTurnoPct, teachersRanking) {
+    const top = modalitiesList[0];
+    const low = modalitiesList.filter(m => m.classesCount >= 2 && m.avgNum < 8);
+    const topTeacher = teachersRanking[0];
+
+    const boxes = [];
+
+    if (top) {
+        boxes.push(`
+            <div class="insight-item">
+                <span class="insight-icon">🔥</span>
+                <div>
+                    <h5>Carro-Chefe de Público: ${escapeHtml(top.name)}</h5>
+                    <p>Lidera a preferência com média expressiva de <strong>${top.avg} alunos por aula</strong> e somou <strong>${top.totalStudents} presenças</strong>. Alta retenção de alunos para a academia.</p>
+                </div>
+            </div>
+        `);
+    }
+
+    boxes.push(`
+        <div class="insight-item">
+            <span class="insight-icon">⏰</span>
+            <div>
+                <h5>Pico de Frequência no Turno da ${peakTurno}</h5>
+                <p>O turno da <strong>${peakTurno}</strong> concentra <strong>${peakTurnoPct}%</strong> da movimentação total de alunos. Mantenha os horários nobres fortalecidos.</p>
+            </div>
+        </div>
+    `);
+
+    if (recordCheckin) {
+        boxes.push(`
+            <div class="insight-item">
+                <span class="insight-icon">🏆</span>
+                <div>
+                    <h5>Recorde de Lotação: ${recordCheckin.students_count} Alunos</h5>
+                    <p>Atingido na aula de <strong>${escapeHtml(recordCheckin.modality)}</strong> às <strong>${recordCheckin.class_time}</strong> (${formatDateBr(recordCheckin.class_date)}). Prova do potencial máximo da sala.</p>
+                </div>
+            </div>
+        `);
+    }
+
+    if (topTeacher) {
+        boxes.push(`
+            <div class="insight-item">
+                <span class="insight-icon">👥</span>
+                <div>
+                    <h5>Professor(a) com Maior Volume: ${escapeHtml(topTeacher.name)}</h5>
+                    <p>Mobilizou <strong>${topTeacher.totalStudents} presenças</strong> no período, com média de <strong>${topTeacher.avg} alunos por aula</strong>.</p>
+                </div>
+            </div>
+        `);
+    }
+
+    if (low.length > 0) {
+        const lowNames = low.map(l => `${l.name} (${l.avg})`).join(', ');
+        boxes.push(`
+            <div class="insight-item" style="border-left: 3px solid #ef4444;">
+                <span class="insight-icon">⚠️</span>
+                <div>
+                    <h5>Oportunidade de Ajuste de Horário</h5>
+                    <p>Aulas com média abaixo de 8 alunos: <strong>${escapeHtml(lowNames)}</strong>. Avalie se o horário ou divulgação podem ser otimizados.</p>
+                </div>
+            </div>
+        `);
+    }
+
+    return boxes.join('');
+}
+
+function initDashboardCharts(modalitiesList, timesList, daysList) {
+    if (typeof window.Chart === 'undefined') {
+        console.warn('Chart.js ainda não carregou do CDN.');
+        return;
+    }
+
+    const palette = [
+        '#ea580c', '#3b82f6', '#10b981', '#8b5cf6', 
+        '#f59e0b', '#ec4899', '#06b6d4', '#84cc16', '#64748b'
+    ];
+
+    // Chart 1: Média de Alunos por Modalidade (Horizontal Bar)
+    const ctx1 = document.getElementById('chart-modalities-avg')?.getContext('2d');
+    if (ctx1) {
+        const labels = modalitiesList.map(m => m.name);
+        const dataVals = modalitiesList.map(m => m.avgNum);
+
+        _dashboardCharts.modalitiesAvg = new window.Chart(ctx1, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Média de Alunos/Aula',
+                    data: dataVals,
+                    backgroundColor: modalitiesList.map((m, i) => i === 0 ? '#ea580c' : (m.avgNum >= 12 ? '#10b981' : '#3b82f6')),
+                    borderRadius: 6,
+                    maxBarThickness: 24
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` Média: ${ctx.raw.toFixed(1)} alunos/aula`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.06)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    },
+                    y: {
+                        grid: { display: false },
+                        ticks: { color: '#f8fafc', font: { size: 12, weight: '600' } }
+                    }
+                }
+            }
+        });
+    }
+
+    // Chart 2: Participação Total no Volume de Alunos (Doughnut)
+    const ctx2 = document.getElementById('chart-modalities-pie')?.getContext('2d');
+    if (ctx2) {
+        const labels = modalitiesList.map(m => m.name);
+        const dataVals = modalitiesList.map(m => m.totalStudents);
+
+        _dashboardCharts.modalitiesPie = new window.Chart(ctx2, {
+            type: 'doughnut',
+            data: {
+                labels,
+                datasets: [{
+                    data: dataVals,
+                    backgroundColor: palette.slice(0, labels.length),
+                    borderColor: '#0f172a',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            color: '#cbd5e1',
+                            font: { size: 11, weight: '500' },
+                            padding: 12,
+                            boxWidth: 12
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                const val = ctx.raw;
+                                const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+                                return ` ${val} alunos (${pct}%)`;
+                            }
+                        }
+                    }
+                },
+                cutout: '65%'
+            }
+        });
+    }
+
+    // Chart 3: Ocupação por Horário da Grade (Bar)
+    const ctx3 = document.getElementById('chart-times-bar')?.getContext('2d');
+    if (ctx3) {
+        const labels = timesList.map(t => t.time);
+        const dataVals = timesList.map(t => t.avgNum);
+
+        _dashboardCharts.timesBar = new window.Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Média de Alunos',
+                    data: dataVals,
+                    backgroundColor: timesList.map(t => {
+                        const h = parseInt(t.time.split(':')[0], 10);
+                        return h >= 12 ? '#ea580c' : '#3b82f6';
+                    }),
+                    borderRadius: 6,
+                    maxBarThickness: 32
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` Média: ${ctx.raw.toFixed(1)} alunos`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.06)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    }
+                }
+            }
+        });
+    }
+
+    // Chart 4: Frequência por Dia da Semana (Bar)
+    const ctx4 = document.getElementById('chart-days-bar')?.getContext('2d');
+    if (ctx4) {
+        const labels = daysList.map(d => d.label);
+        const dataVals = daysList.map(d => Number(d.avg));
+
+        _dashboardCharts.daysBar = new window.Chart(ctx4, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Média de Alunos',
+                    data: dataVals,
+                    backgroundColor: '#10b981',
+                    borderRadius: 6,
+                    maxBarThickness: 36
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` Média: ${ctx.raw} alunos`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.06)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -1557,6 +2231,29 @@ function printClosureReport() {
     window.print();
 }
 
+function exportDashboardCSV() {
+    if (!_currentDashboardData || !_currentDashboardData.modalitiesList) {
+        showToast('Nenhum dado disponível para exportar.', 'warning');
+        return;
+    }
+    const { modalitiesList, targetMonth } = _currentDashboardData;
+    let csv = `Posicao;Modalidade;Aulas Ministradas;Total de Alunos;Media Alunos por Aula;Menor Turma;Maior Turma (Recorde);Professores;Status de Lotacao\n`;
+    modalitiesList.forEach((m, idx) => {
+        let status = 'Regular';
+        if (m.avgNum >= 18) status = 'Altissima Procura';
+        else if (m.avgNum >= 12) status = 'Alta Frequencia';
+        else if (m.avgNum >= 8) status = 'Boa Ocupacao';
+        else status = 'Baixa Procura';
+        csv += `${idx + 1};"${m.name}";${m.classesCount};${m.totalStudents};"${String(m.avg).replace('.', ',')}";${m.min};${m.max};"${m.teachersList}";"${status}"\n`;
+    });
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `relatorio_frequencia_coletivas_${targetMonth}.csv`;
+    link.click();
+    showToast('📥 Relatório de frequência baixado com sucesso!', 'success');
+}
+
 function copyWhatsappSummary() {
     const summary = state.adminSummary;
     if (!summary) return;
@@ -1993,6 +2690,9 @@ window.app = {
     exportClosureCSV,
     printClosureReport,
     copyWhatsappSummary,
+    exportDashboardCSV,
+    onDashboardMonthChange: (val) => { state.currentMonth = val; loadAdminTabData(); },
+    setDashboardScope: (scope) => { _dashboardScope = scope; loadAdminTabData(); },
     openAdminModal,
     saveAdminModal,
     deleteAdminAction

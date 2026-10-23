@@ -579,3 +579,33 @@ export async function getMonthClosureSummary(monthYearStr) {
         rawCheckins: checkins
     };
 }
+
+// ──────────────────────────────────────────────
+// Dashboard de Frequência & Popularidade das Aulas
+// ──────────────────────────────────────────────
+
+export async function getAttendanceDashboardData(monthYearStr = null) {
+    const sb = getClient();
+    let query = sb
+        .from('coletivas_checkins')
+        .select(`
+            *,
+            teacher:coletivas_teachers!teacher_id(id, name, short_name, email, rate_per_class, payment_method)
+        `)
+        .eq('tenant_id', CONFIG.tenantId)
+        .eq('status', 'CONFIRMADA')
+        .order('class_date', { ascending: true })
+        .order('class_time', { ascending: true });
+
+    if (monthYearStr && monthYearStr !== 'all') {
+        const startDate = `${monthYearStr}-01`;
+        const [year, month] = monthYearStr.split('-').map(Number);
+        const lastDay = new Date(year, month, 0).getDate();
+        const endDate = `${monthYearStr}-${String(lastDay).padStart(2, '0')}`;
+        query = query.gte('class_date', startDate).lte('class_date', endDate);
+    }
+
+    const { data: checkins, error } = await query;
+    if (error) throw error;
+    return checkins || [];
+}
