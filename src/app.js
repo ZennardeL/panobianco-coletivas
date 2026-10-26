@@ -873,10 +873,10 @@ async function renderDashboardTab(container) {
         const totalAlunos = checkins.reduce((sum, c) => sum + (Number(c.students_count) || 0), 0);
         const mediaGeral = totalAulas > 0 ? (totalAlunos / totalAulas).toFixed(1) : '0';
 
-        // 1. Agregação por Modalidade
+        // 1. Agregação por Modalidade (Normaliza e integra reposições à modalidade principal)
         const modalitiesMap = {};
         checkins.forEach(c => {
-            const mod = (c.modality || 'Outro').trim();
+            const mod = api.normalizeModality ? api.normalizeModality(c.modality) : (c.modality || 'Outro').trim();
             const count = Number(c.students_count) || 0;
             if (!modalitiesMap[mod]) {
                 modalitiesMap[mod] = {

@@ -330,6 +330,41 @@ export async function deleteSchedule(scheduleId) {
 
 const _pendingCheckins = new Set();
 
+/**
+ * Normaliza o nome da modalidade integrando reposições ao nome principal
+ * e unificando variações de maiúsculas/minúsculas.
+ */
+export function normalizeModality(modalityName) {
+    if (!modalityName) return 'Outro';
+    let clean = String(modalityName).trim();
+    
+    // Remover sufixos ou anotações de reposição
+    clean = clean.replace(/\s*[-–—/()]?\s*reposi[çc][ãa]o\s*[)]?/gi, '').trim();
+
+    // Normalizar capitalizações conhecidas
+    const knownModalities = {
+        'fitdance': 'FitDance',
+        'mat pilates': 'Mat Pilates',
+        'pilates': 'Pilates',
+        'funcional': 'Funcional',
+        'gap': 'GAP',
+        'yoga': 'Yoga',
+        'step': 'Step',
+        'jump': 'Jump',
+        'jumpdance': 'JumpDance',
+        'jump dance': 'JumpDance',
+        'ritbox': 'Ritbox'
+    };
+
+    const lower = clean.toLowerCase();
+    if (knownModalities[lower]) {
+        return knownModalities[lower];
+    }
+
+    if (!clean) return 'Outro';
+    return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
 export async function getCheckins(monthYearStr, teacherId = null) {
     const sb = getClient();
     const startDate = `${monthYearStr}-01`;
@@ -373,8 +408,15 @@ export async function createCheckin({
     notes = '',
     studentsCount = 0
 }) {
+    // Normalizar modalidade para evitar fragmentação no dashboard e integrar reposições
+    const cleanModality = normalizeModality(modality);
+    let finalNotes = (notes || '').trim();
+    if (/reposi[çc][ãa]o/i.test(modality) && !/reposi[çc][ãa]o/i.test(finalNotes)) {
+        finalNotes = finalNotes ? `${finalNotes} (Reposição)` : 'Reposição de aula';
+    }
+
     // Evitar requisições concorrentes disparadas por múltiplos cliques
-    const lockKey = `${teacherId}_${classDate}_${classTime}_${modality}`;
+    const lockKey = `${teacherId}_${classDate}_${classTime}_${cleanModality}`;
     if (_pendingCheckins.has(lockKey)) {
         throw new Error('Check-in já em processamento. Aguarde alguns segundos.');
     }
@@ -391,7 +433,7 @@ export async function createCheckin({
             .eq('teacher_id', teacherId)
             .eq('class_date', classDate)
             .eq('class_time', classTime)
-            .eq('modality', modality)
+            .eq('modality', cleanModality)
             .eq('status', 'CONFIRMADA')
             .limit(1);
         
@@ -425,13 +467,13 @@ export async function createCheckin({
             teacher_id: teacherId,
             class_date: classDate,
             class_time: classTime,
-            modality: modality,
+            modality: cleanModality,
             is_substitution: isSubstitution,
             original_teacher_id: originalTeacherId || null,
             status: 'CONFIRMADA',
             rate_applied: rate,
             payment_method_applied: paymentMethod,
-            notes: notes || null,
+            notes: finalNotes || null,
             students_count: Number(studentsCount) || 0
         };
 
@@ -452,7 +494,7 @@ export async function createCheckin({
             sendCheckinConfirmationEmail({
                 to: t.email,
                 teacherName: t.name,
-                modality: modality,
+                modality: cleanModality,
                 classDate: classDate,
                 classTime: classTime,
                 isSubstitution: isSubstitution,
@@ -630,5 +672,11 @@ export async function getAttendanceDashboardData(monthYearStr = null) {
 
     const { data: checkins, error } = await query;
     if (error) throw error;
-    return checkins || [];
+    
+    // Normalizar a modalidade para integrar aulas de reposição e unificar grafia
+    return (checkins || []).map(c => ({
+        ...c,
+        raw_modality: c.modality,
+        modality: normalizeModality(c.modality)
+    }));
 }
