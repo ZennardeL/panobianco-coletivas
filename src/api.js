@@ -328,6 +328,8 @@ export async function deleteSchedule(scheduleId) {
 // Check-ins e Notificações por E-mail
 // ──────────────────────────────────────────────
 
+const _pendingCheckins = new Set();
+
 export async function getCheckins(monthYearStr, teacherId = null) {
     const sb = getClient();
     const startDate = `${monthYearStr}-01`;
@@ -371,87 +373,98 @@ export async function createCheckin({
     notes = '',
     studentsCount = 0
 }) {
-    const sb = getClient();
-
-    // 1. Evitar duplicidade de check-ins (mesmo dia, mesma hora, mesmo professor e modalidade)
-    const { data: existing, error: checkErr } = await sb
-        .from('coletivas_checkins')
-        .select('id')
-        .eq('tenant_id', CONFIG.tenantId)
-        .eq('teacher_id', teacherId)
-        .eq('class_date', classDate)
-        .eq('class_time', classTime)
-        .eq('modality', modality)
-        .eq('status', 'CONFIRMADA')
-        .limit(1);
-    
-    if (existing && existing.length > 0) {
-        throw new Error('Check-in já foi realizado para esta aula hoje.');
+    // Evitar requisições concorrentes disparadas por múltiplos cliques
+    const lockKey = `${teacherId}_${classDate}_${classTime}_${modality}`;
+    if (_pendingCheckins.has(lockKey)) {
+        throw new Error('Check-in já em processamento. Aguarde alguns segundos.');
     }
+    _pendingCheckins.add(lockKey);
 
-    // 2. Obter dados do professor para aplicar valor e obter e-mail
-    const { data: t } = await sb
-        .from('coletivas_teachers')
-        .select('id, name, short_name, email, rate_per_class, payment_method')
-        .eq('id', teacherId)
-        .single();
+    try {
+        const sb = getClient();
 
-    const rate = rateApplied || (t ? t.rate_per_class : 50.00);
-    const paymentMethod = paymentMethodApplied || (t ? t.payment_method : 'RECIBO');
+        // 1. Evitar duplicidade de check-ins (mesmo dia, mesma hora, mesmo professor e modalidade)
+        const { data: existing, error: checkErr } = await sb
+            .from('coletivas_checkins')
+            .select('id')
+            .eq('tenant_id', CONFIG.tenantId)
+            .eq('teacher_id', teacherId)
+            .eq('class_date', classDate)
+            .eq('class_time', classTime)
+            .eq('modality', modality)
+            .eq('status', 'CONFIRMADA')
+            .limit(1);
+        
+        if (existing && existing.length > 0) {
+            throw new Error('Check-in já foi realizado para esta aula hoje.');
+        }
 
-    let origTeacherName = null;
-    if (originalTeacherId) {
-        const { data: ot } = await sb
+        // 2. Obter dados do professor para aplicar valor e obter e-mail
+        const { data: t } = await sb
             .from('coletivas_teachers')
-            .select('short_name, name')
-            .eq('id', originalTeacherId)
+            .select('id, name, short_name, email, rate_per_class, payment_method')
+            .eq('id', teacherId)
             .single();
-        if (ot) origTeacherName = ot.short_name || ot.name;
-    }
 
-    const payload = {
-        tenant_id: CONFIG.tenantId,
-        schedule_id: scheduleId || null,
-        teacher_id: teacherId,
-        class_date: classDate,
-        class_time: classTime,
-        modality: modality,
-        is_substitution: isSubstitution,
-        original_teacher_id: originalTeacherId || null,
-        status: 'CONFIRMADA',
-        rate_applied: rate,
-        payment_method_applied: paymentMethod,
-        notes: notes || null,
-        students_count: Number(studentsCount) || 0
-    };
+        const rate = rateApplied || (t ? t.rate_per_class : 50.00);
+        const paymentMethod = paymentMethodApplied || (t ? t.payment_method : 'RECIBO');
 
-    const { data, error } = await sb
-        .from('coletivas_checkins')
-        .insert(payload)
-        .select(`
-            *,
-            teacher:coletivas_teachers!teacher_id(id, name, short_name, email),
-            original_teacher:coletivas_teachers!original_teacher_id(id, name, short_name)
-        `)
-        .single();
+        let origTeacherName = null;
+        if (originalTeacherId) {
+            const { data: ot } = await sb
+                .from('coletivas_teachers')
+                .select('short_name, name')
+                .eq('id', originalTeacherId)
+                .single();
+            if (ot) origTeacherName = ot.short_name || ot.name;
+        }
 
-    if (error) throw error;
-
-    // Disparar envio de e-mail de confirmação para o professor (se tiver e-mail cadastrado)
-    if (t?.email) {
-        sendCheckinConfirmationEmail({
-            to: t.email,
-            teacherName: t.name,
+        const payload = {
+            tenant_id: CONFIG.tenantId,
+            schedule_id: scheduleId || null,
+            teacher_id: teacherId,
+            class_date: classDate,
+            class_time: classTime,
             modality: modality,
-            classDate: classDate,
-            classTime: classTime,
-            isSubstitution: isSubstitution,
-            coveredTeacher: origTeacherName,
-            teacherId: t.id
-        }).catch(e => console.warn('Aviso: envio de e-mail assíncrono:', e));
-    }
+            is_substitution: isSubstitution,
+            original_teacher_id: originalTeacherId || null,
+            status: 'CONFIRMADA',
+            rate_applied: rate,
+            payment_method_applied: paymentMethod,
+            notes: notes || null,
+            students_count: Number(studentsCount) || 0
+        };
 
-    return data;
+        const { data, error } = await sb
+            .from('coletivas_checkins')
+            .insert(payload)
+            .select(`
+                *,
+                teacher:coletivas_teachers!teacher_id(id, name, short_name, email),
+                original_teacher:coletivas_teachers!original_teacher_id(id, name, short_name)
+            `)
+            .single();
+
+        if (error) throw error;
+
+        // Disparar envio de e-mail de confirmação para o professor (se tiver e-mail cadastrado)
+        if (t?.email) {
+            sendCheckinConfirmationEmail({
+                to: t.email,
+                teacherName: t.name,
+                modality: modality,
+                classDate: classDate,
+                classTime: classTime,
+                isSubstitution: isSubstitution,
+                coveredTeacher: origTeacherName,
+                teacherId: t.id
+            }).catch(e => console.warn('Aviso: envio de e-mail assíncrono:', e));
+        }
+
+        return data;
+    } finally {
+        _pendingCheckins.delete(lockKey);
+    }
 }
 
 export async function sendCheckinConfirmationEmail({
@@ -505,6 +518,16 @@ export async function cancelCheckin(checkinId) {
     const { error } = await sb
         .from('coletivas_checkins')
         .update({ status: 'CANCELADA' })
+        .eq('id', checkinId);
+    if (error) throw error;
+    return true;
+}
+
+export async function deleteCheckin(checkinId) {
+    const sb = getClient();
+    const { error } = await sb
+        .from('coletivas_checkins')
+        .delete()
         .eq('id', checkinId);
     if (error) throw error;
     return true;

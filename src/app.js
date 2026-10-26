@@ -491,6 +491,8 @@ function renderTeacherHistoryList(checkins) {
         return;
     }
 
+    const today = new Date().toISOString().split('T')[0];
+
     container.innerHTML = checkins.map(c => `
         <div class="history-item">
             <div class="history-date">
@@ -506,8 +508,13 @@ function renderTeacherHistoryList(checkins) {
                 `}
                 ${c.notes ? `<p class="history-notes">${c.notes}</p>` : ''}
             </div>
-            <div class="history-status">
+            <div class="history-status" style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
                 <span class="status-confirmed">Confirmada</span>
+                ${c.class_date === today ? `
+                    <button class="btn btn-sm btn-outline text-danger" style="font-size: 0.72rem; padding: 2px 8px; border-color: rgba(239, 68, 68, 0.4); color: #f87171;" onclick="app.teacherCancelCheckin('${c.id}')" title="Desfazer lançamento realizado hoje por engano">
+                        🗑️ Desfazer
+                    </button>
+                ` : ''}
             </div>
         </div>
     `).join('');
@@ -536,6 +543,7 @@ async function doCheckin(scheduleId, classTime, modality, isSubstitution, studen
     } catch (err) {
         console.error('Erro ao realizar checkin:', err);
         showToast(`❌ Falha no check-in: ${err.message}`, 'danger');
+        throw err;
     }
 }
 
@@ -1994,38 +2002,49 @@ function openTeacherClassesDetail(teacherId) {
                     <button class="btn-close" onclick="app.closeModal('teacher-detail-modal')">✕</button>
                 </div>
                 <div class="modal-body">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Data</th>
-                                <th>Horário</th>
-                                <th>Modalidade</th>
-                                <th>Condição</th>
-                                <th class="text-right">Valor da Aula</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${teacherData.classes.length === 0 ? `
-                                <tr><td colspan="5" class="text-center">Nenhuma aula registrada no período.</td></tr>
-                            ` : teacherData.classes.map(c => `
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
                                 <tr>
-                                    <td><strong>${formatDateBr(c.class_date)}</strong></td>
-                                    <td>${c.class_time}</td>
-                                    <td><strong>${c.modality}</strong></td>
-                                    <td>
-                                        ${c.is_substitution ? `
-                                            <span class="badge-subst">Substituiu ${c.original_teacher?.short_name || 'Colega'}</span>
-                                        ` : `
-                                            <span class="badge-regular">Regular</span>
-                                        `}
-                                    </td>
-                                    <td class="text-right font-bold text-orange">${formatCurrency(c.rate_applied)}</td>
+                                    <th>Data</th>
+                                    <th>Horário</th>
+                                    <th>Modalidade</th>
+                                    <th class="text-center">Alunos</th>
+                                    <th>Condição</th>
+                                    <th class="text-right">Valor da Aula</th>
+                                    <th class="text-center" style="width: 100px;">Ações</th>
                                 </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                ${teacherData.classes.length === 0 ? `
+                                    <tr><td colspan="7" class="text-center">Nenhuma aula registrada no período.</td></tr>
+                                ` : teacherData.classes.map(c => `
+                                    <tr>
+                                        <td><strong>${formatDateBr(c.class_date)}</strong></td>
+                                        <td>${c.class_time}</td>
+                                        <td><strong>${c.modality}</strong></td>
+                                        <td class="text-center"><strong>${c.students_count || 0}</strong></td>
+                                        <td>
+                                            ${c.is_substitution ? `
+                                                <span class="badge-subst">Substituiu ${c.original_teacher?.short_name || 'Colega'}</span>
+                                            ` : `
+                                                <span class="badge-regular">Regular</span>
+                                            `}
+                                        </td>
+                                        <td class="text-right font-bold text-orange">${formatCurrency(c.rate_applied)}</td>
+                                        <td class="text-center">
+                                            <button class="btn btn-sm btn-danger" onclick="app.removeCheckin('${c.id}', '${c.modality}', '${formatDateBr(c.class_date)}', '${c.class_time}', '${teacherId}')" title="Excluir/Cancelar este lançamento de aula">
+                                                🗑️ Excluir
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.85rem; color: #94a3b8;">💡 Aulas excluídas são canceladas e deduzidas automaticamente do fechamento.</span>
                     <button class="btn btn-outline" onclick="app.closeModal('teacher-detail-modal')">Fechar</button>
                 </div>
             </div>
@@ -2398,8 +2417,21 @@ window.app = {
             return;
         }
 
-        closeModal('confirm-checkin-modal');
-        await doCheckin(scheduleId, classTime, modality, isSubstitution, studentsCount, notes, null);
+        const confirmBtn = document.querySelector('#confirm-checkin-modal .btn-primary');
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerText = 'Gravando...';
+        }
+
+        try {
+            await doCheckin(scheduleId, classTime, modality, isSubstitution, studentsCount, notes, null);
+            closeModal('confirm-checkin-modal');
+        } catch (err) {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerText = '✔️ Confirmar Presença';
+            }
+        }
     },
     openManualTeacherCheckinModal,
     confirmManualTeacherCheckin: async () => {
@@ -2412,6 +2444,12 @@ window.app = {
         if (!modality || !date || !time) {
             showToast('Preencha a modalidade, data e horário da aula.', 'warning');
             return;
+        }
+
+        const confirmBtn = document.querySelector('#manual-teacher-checkin-modal .btn-primary');
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerText = 'Gravando check-in...';
         }
 
         try {
@@ -2429,7 +2467,21 @@ window.app = {
             showToast(`🎉 Presença confirmada em ${modality}! E-mail enviado.`, 'success');
             await loadTeacherData();
         } catch (err) {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerText = 'Confirmar Presença';
+            }
             showToast(`Erro: ${err.message}`, 'danger');
+        }
+    },
+    teacherCancelCheckin: async (id) => {
+        if (!confirm('Você realmente deseja desfazer este check-in de aula realizado hoje?')) return;
+        try {
+            await api.cancelCheckin(id);
+            showToast('✅ Presença desfeita com sucesso.', 'info');
+            await loadTeacherData();
+        } catch (err) {
+            showToast(`Erro ao desfazer check-in: ${err.message}`, 'danger');
         }
     },
     switchAdminTab: (tab) => {
@@ -2576,6 +2628,12 @@ window.app = {
             return;
         }
 
+        const confirmBtn = document.querySelector('#manual-checkin-modal .btn-primary');
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerText = 'Gravando...';
+        }
+
         try {
             await api.createCheckin({
                 teacherId,
@@ -2587,8 +2645,13 @@ window.app = {
             });
             closeModal('manual-checkin-modal');
             showToast('✅ Aula manual lançada com sucesso!', 'success');
+            state.adminSummary = null;
             loadAdminTabData();
         } catch (err) {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerText = 'Confirmar Registro';
+            }
             showToast(`Erro: ${err.message}`, 'danger');
         }
     },
@@ -2619,13 +2682,40 @@ window.app = {
         }
     },
     cancelCheckin: async (id) => {
-        if (!confirm('Deseja estornar/cancelar este check-in?')) return;
+        if (!confirm('Deseja realmente cancelar este check-in de aula?\nEle deixará de constar no fechamento salarial e no histórico.')) return;
         try {
             await api.cancelCheckin(id);
-            showToast('Check-in cancelado.', 'info');
+            showToast('✅ Check-in cancelado com sucesso.', 'info');
+            state.adminSummary = null;
             loadAdminTabData();
         } catch (err) {
             showToast(`Erro: ${err.message}`, 'danger');
+        }
+    },
+    removeCheckin: async (checkinId, modality, date, time, teacherId) => {
+        const confirmMsg = `Deseja realmente excluir/cancelar o lançamento desta aula?\n\n• Modalidade: ${modality}\n• Data: ${date} às ${time}\n\nO valor será deduzido imediatamente do fechamento do mês.`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            await api.cancelCheckin(checkinId);
+            showToast('✅ Aula excluída/cancelada com sucesso!', 'success');
+
+            // 1. Atualizar fechamento consolidado
+            const freshSummary = await api.getMonthClosureSummary(state.currentMonth);
+            state.adminSummary = freshSummary;
+
+            // 2. Se a aba de fechamento estiver aberta no fundo, recarregar a tabela
+            if (currentAdminTab === 'fechamento') {
+                const main = document.getElementById('admin-view-content');
+                if (main) renderAdminClosureTab(main);
+            }
+
+            // 3. Atualizar o modal do professor com os novos dados
+            if (document.getElementById('teacher-detail-modal')) {
+                openTeacherClassesDetail(teacherId);
+            }
+        } catch (err) {
+            showToast(`Erro ao excluir aula: ${err.message}`, 'danger');
         }
     },
     closeModal,
