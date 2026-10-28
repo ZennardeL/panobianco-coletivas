@@ -680,3 +680,98 @@ export async function getAttendanceDashboardData(monthYearStr = null) {
         modality: normalizeModality(c.modality)
     }));
 }
+
+// ──────────────────────────────────────────────
+// Registro e Consulta de Aulas Canceladas / Não Realizadas
+// ──────────────────────────────────────────────
+
+export async function getCancelledClasses(monthYearStr = null, teacherId = null) {
+    const sb = getClient();
+    let query = sb
+        .from('coletivas_checkins')
+        .select(`
+            *,
+            teacher:coletivas_teachers!teacher_id(id, name, short_name, email)
+        `)
+        .eq('tenant_id', CONFIG.tenantId)
+        .eq('status', 'AULA_CANCELADA')
+        .order('class_date', { ascending: false })
+        .order('class_time', { ascending: false });
+
+    if (monthYearStr && monthYearStr !== 'all') {
+        const startDate = `${monthYearStr}-01`;
+        const [year, month] = monthYearStr.split('-').map(Number);
+        const lastDay = new Date(year, month, 0).getDate();
+        const endDate = `${monthYearStr}-${String(lastDay).padStart(2, '0')}`;
+        query = query.gte('class_date', startDate).lte('class_date', endDate);
+    }
+
+    if (teacherId) {
+        query = query.eq('teacher_id', teacherId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+}
+
+export async function registerCancelledClass({
+    teacherId,
+    scheduleId = null,
+    classDate,
+    classTime,
+    modality,
+    cancelReason = 'FERIADO',
+    notes = ''
+}) {
+    const sb = getClient();
+    const cleanModality = normalizeModality(modality);
+
+    // Verificar se já existe aula confirmada ou cancelada no mesmo horário/data
+    const { data: existing } = await sb
+        .from('coletivas_checkins')
+        .select('id, status')
+        .eq('tenant_id', CONFIG.tenantId)
+        .eq('teacher_id', teacherId)
+        .eq('class_date', classDate)
+        .eq('class_time', classTime)
+        .eq('modality', cleanModality)
+        .in('status', ['CONFIRMADA', 'AULA_CANCELADA'])
+        .limit(1);
+
+    if (existing && existing.length > 0) {
+        if (existing[0].status === 'CONFIRMADA') {
+            throw new Error('Já existe um check-in de presença confirmado para esta aula nesta data.');
+        }
+        throw new Error('Esta aula já foi registrada como cancelada nesta data.');
+    }
+
+    const payload = {
+        tenant_id: CONFIG.tenantId,
+        schedule_id: scheduleId || null,
+        teacher_id: teacherId,
+        class_date: classDate,
+        class_time: classTime,
+        modality: cleanModality,
+        is_substitution: false,
+        original_teacher_id: null,
+        status: 'AULA_CANCELADA',
+        cancel_reason: cancelReason,
+        rate_applied: 0,
+        payment_method_applied: 'ISENTO',
+        notes: notes ? notes.trim() : null,
+        students_count: 0
+    };
+
+    const { data, error } = await sb
+        .from('coletivas_checkins')
+        .insert(payload)
+        .select(`
+            *,
+            teacher:coletivas_teachers!teacher_id(id, name, short_name, email)
+        `)
+        .single();
+
+    if (error) throw error;
+    return data;
+}

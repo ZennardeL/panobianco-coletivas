@@ -65,6 +65,18 @@ function getMonthName(yearMonthStr) {
     return `${months[Number(m) - 1]} de ${y}`;
 }
 
+function formatCancelReasonLabel(reason) {
+    const map = {
+        'FERIADO': '🏖️ Feriado / Recesso',
+        'FALTA_PROFESSOR': '🤒 Falta / Atestado do Professor',
+        'MANUTENCAO': '🔧 Manutenção / Sala Interditada',
+        'CLIMA_EVENTO': '⛈️ Clima / Evento Externo',
+        'SEM_ALUNOS': '👥 Sem Quórum de Alunos',
+        'OUTRO': '📌 Outro Motivo'
+    };
+    return map[reason] || reason || 'Não realizada';
+}
+
 // ──────────────────────────────────────────────
 // Inicialização do App
 // ──────────────────────────────────────────────
@@ -385,8 +397,12 @@ async function loadTeacherData() {
     const todayDateStr = today.toISOString().split('T')[0];
 
     try {
-        const checkins = await api.getCheckins(state.currentMonth, teacher.id);
+        const [checkins, cancelledClasses] = await Promise.all([
+            api.getCheckins(state.currentMonth, teacher.id),
+            api.getCancelledClasses(state.currentMonth, teacher.id).catch(() => [])
+        ]);
         state.teacherCheckins = checkins;
+        state.teacherCancelled = cancelledClasses;
 
         // Atualizar contador do mês (SEM NENHUM VALOR EM R$)
         const badgeEl = document.getElementById('teacher-total-classes-badge');
@@ -402,12 +418,13 @@ async function loadTeacherData() {
         // Todas as aulas do professor na semana
         const myAllSchedules = state.schedules.filter(s => s.default_teacher_id === teacher.id);
 
-        // Check-ins já realizados hoje
+        // Check-ins já realizados hoje e aulas canceladas hoje
         const todayDoneCheckins = checkins.filter(c => c.class_date === todayDateStr);
+        const todayCancelled = cancelledClasses.filter(c => c.class_date === todayDateStr);
 
-        renderTodayClassesList(todaySchedules, todayDoneCheckins, todayDateStr);
+        renderTodayClassesList(todaySchedules, todayDoneCheckins, todayDateStr, todayCancelled);
         renderMyWeeklySchedules(myAllSchedules);
-        renderTeacherHistoryList(checkins);
+        renderTeacherHistoryList(checkins, cancelledClasses);
 
     } catch (err) {
         console.error('Erro ao carregar dados do professor:', err);
@@ -415,7 +432,7 @@ async function loadTeacherData() {
     }
 }
 
-function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
+function renderTodayClassesList(schedules, doneCheckins, todayDateStr, todayCancelled = []) {
     const container = document.getElementById('teacher-today-classes');
     if (!container) return;
 
@@ -433,8 +450,12 @@ function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
     }
 
     container.innerHTML = schedules.map(sched => {
+        const cleanSchedMod = api.normalizeModality ? api.normalizeModality(sched.modality) : sched.modality;
         const isDone = doneCheckins.find(c => 
-            c.class_time === sched.start_time && c.modality === sched.modality
+            c.class_time === sched.start_time && (c.modality === sched.modality || c.modality === cleanSchedMod)
+        );
+        const isCancelled = todayCancelled.find(c =>
+            c.class_time === sched.start_time && (c.modality === sched.modality || c.modality === cleanSchedMod)
         );
 
         return `
@@ -444,12 +465,19 @@ function renderTodayClassesList(schedules, doneCheckins, todayDateStr) {
                     <span class="class-modality">${sched.modality}</span>
                     <span class="class-role">Aula Regular de Hoje (${dayName})</span>
                 </div>
-                <div class="class-action">
+                <div class="class-action" style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
                     ${isDone ? `
                         <span class="badge-done">✅ Confirmada</span>
+                    ` : isCancelled ? `
+                        <span class="badge-subst" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">
+                            🚫 Cancelada (${formatCancelReasonLabel(isCancelled.cancel_reason)})
+                        </span>
                     ` : `
                         <button class="btn btn-checkin" onclick="app.openConfirmCheckinModal('${sched.id}', '${sched.start_time}', '${sched.modality}', false)">
                             📍 Confirmar Presença
+                        </button>
+                        <button class="btn btn-sm btn-outline" style="border-color: rgba(239, 68, 68, 0.45); color: #f87171;" onclick="app.openCancelScheduledClassModal('${sched.id}', '${sched.start_time}', '${sched.modality}')" title="Registrar que esta aula não aconteceu hoje (feriado, manutenção, falta, etc.)">
+                            🚫 Não Houve Aula
                         </button>
                     `}
                 </div>
@@ -866,7 +894,10 @@ async function renderDashboardTab(container) {
     try {
         const isAllScope = (_dashboardScope === 'all');
         const targetMonth = isAllScope ? 'all' : state.currentMonth;
-        const checkins = await api.getAttendanceDashboardData(targetMonth);
+        const [checkins, cancelledClasses] = await Promise.all([
+            api.getAttendanceDashboardData(targetMonth),
+            api.getCancelledClasses(targetMonth).catch(() => [])
+        ]);
 
         // Agregações Gerais
         const totalAulas = checkins.length;
@@ -1022,6 +1053,9 @@ async function renderDashboardTab(container) {
                         `}
                     </div>
                     <div class="toolbar-actions">
+                        <button class="btn btn-outline" style="border-color: rgba(239, 68, 68, 0.5); color: #f87171;" onclick="app.openAdminCancelledClassModal()">
+                            🚫 Registrar Aula Cancelada
+                        </button>
                         <button class="btn btn-outline" onclick="app.exportDashboardCSV()">
                             📥 Baixar Relatório (CSV)
                         </button>
@@ -1067,6 +1101,11 @@ async function renderDashboardTab(container) {
                             <div class="m-title">TURNO COM MAIOR PÚBLICO</div>
                             <div class="m-value" style="color: #a855f7;">${peakTurno}</div>
                             <div class="m-sub">${peakTurnoPct}% das presenças no período</div>
+                        </div>
+                        <div class="m-card">
+                            <div class="m-title">AULAS CANCELADAS</div>
+                            <div class="m-value" style="color: #f87171;">${cancelledClasses.length} <small style="font-size: 0.85rem; font-weight: 600;">no período</small></div>
+                            <div class="m-sub">Justificadas (não afetam a média)</div>
                         </div>
                     </div>
 
@@ -1168,6 +1207,51 @@ async function renderDashboardTab(container) {
                             ${renderInsightsBoxes(modalitiesList, recordCheckin, peakTurno, peakTurnoPct, teachersRanking)}
                         </div>
                     </div>
+
+                    ${cancelledClasses.length > 0 ? `
+                        <div class="table-card" style="margin-top: 24px; border: 1px solid rgba(239, 68, 68, 0.25);">
+                            <div class="table-header">
+                                <div>
+                                    <h3 style="color: #f87171;">🚫 Histórico de Aulas Canceladas / Não Realizadas (${cancelledClasses.length})</h3>
+                                    <p>Aulas justificadas que não aconteceram (feriados, manutenção, atestados) — isoladas para não distorcer a média de alunos nem somar na folha</p>
+                                </div>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Data / Horário</th>
+                                            <th>Modalidade</th>
+                                            <th>Professor Titular</th>
+                                            <th>Motivo do Cancelamento</th>
+                                            <th>Observações</th>
+                                            <th class="text-right">Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${cancelledClasses.map(cc => `
+                                            <tr>
+                                                <td><strong>${formatDateBr(cc.class_date)}</strong> às ${cc.class_time}</td>
+                                                <td><strong>${escapeHtml(cc.modality)}</strong></td>
+                                                <td>${escapeHtml(cc.teacher?.name || 'Professor')}</td>
+                                                <td>
+                                                    <span class="badge-subst" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">
+                                                        ${formatCancelReasonLabel(cc.cancel_reason)}
+                                                    </span>
+                                                </td>
+                                                <td style="color: #94a3b8; font-size: 0.82rem;">${escapeHtml(cc.notes || '—')}</td>
+                                                <td class="text-right">
+                                                    <button class="btn btn-sm btn-danger" onclick="app.deleteCancelledClassRecord('${cc.id}')" title="Remover registro de cancelamento">
+                                                        🗑️ Remover
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : ''}
                 `}
             </div>
         `;
@@ -1669,7 +1753,10 @@ function renderProfessoresTab(container) {
 async function renderRegistrosTab(container) {
     container.innerHTML = `<div class="loading-spinner">Buscando check-ins de ${state.currentMonth}...</div>`;
     try {
-        const checkins = await api.getCheckins(state.currentMonth);
+        const [checkins, cancelledClasses] = await Promise.all([
+            api.getCheckins(state.currentMonth),
+            api.getCancelledClasses(state.currentMonth).catch(() => [])
+        ]);
         state.adminCheckins = checkins;
 
         container.innerHTML = `
@@ -1680,8 +1767,11 @@ async function renderRegistrosTab(container) {
                             <h3>📜 Registro Geral de Presenças • ${getMonthName(state.currentMonth)}</h3>
                             <p>Histórico auditável de todos os check-ins realizados</p>
                         </div>
-                        <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                             <input type="month" class="month-input" value="${state.currentMonth}" onchange="app.onAdminMonthChange(this.value)">
+                            <button class="btn btn-outline" style="border-color: rgba(239, 68, 68, 0.5); color: #f87171;" onclick="app.openAdminCancelledClassModal()">
+                                🚫 Registrar Aula Cancelada
+                            </button>
                             <button class="btn btn-primary" onclick="app.openManualCheckinModal()">
                                 ➕ Lançar Aula Manual
                             </button>
@@ -1727,6 +1817,52 @@ async function renderRegistrosTab(container) {
                                         <td>
                                             <button class="btn btn-sm btn-danger" onclick="app.cancelCheckin('${c.id}')" title="Cancelar este lançamento">
                                                 ✕ Cancelar
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Seção: Aulas Canceladas / Não Realizadas no Mês -->
+                <div class="table-card" style="margin-top: 20px; border: 1px solid rgba(239, 68, 68, 0.25);">
+                    <div class="table-header">
+                        <div>
+                            <h3 style="color: #f87171;">🚫 Aulas Canceladas / Não Realizadas (${cancelledClasses.length})</h3>
+                            <p>Justificativas registradas para aulas da grade que não aconteceram neste mês</p>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Data / Hora</th>
+                                    <th>Professor Titular</th>
+                                    <th>Modalidade</th>
+                                    <th>Motivo</th>
+                                    <th>Observações</th>
+                                    <th class="text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${cancelledClasses.length === 0 ? `
+                                    <tr><td colspan="6" class="text-center" style="color: #94a3b8;">Nenhuma aula cancelada registrada neste mês.</td></tr>
+                                ` : cancelledClasses.map(cc => `
+                                    <tr>
+                                        <td><strong>${formatDateBr(cc.class_date)}</strong> às ${cc.class_time}</td>
+                                        <td><strong>${escapeHtml(cc.teacher?.name || 'Professor')}</strong></td>
+                                        <td>${escapeHtml(cc.modality)}</td>
+                                        <td>
+                                            <span class="badge-subst" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">
+                                                ${formatCancelReasonLabel(cc.cancel_reason)}
+                                            </span>
+                                        </td>
+                                        <td style="font-size: 0.82rem; color: #94a3b8;">${escapeHtml(cc.notes || '—')}</td>
+                                        <td class="text-right">
+                                            <button class="btn btn-sm btn-danger" onclick="app.deleteCancelledClassRecord('${cc.id}')" title="Remover registro de aula cancelada">
+                                                🗑️ Remover
                                             </button>
                                         </td>
                                     </tr>
@@ -2785,7 +2921,203 @@ window.app = {
     setDashboardScope: (scope) => { _dashboardScope = scope; loadAdminTabData(); },
     openAdminModal,
     saveAdminModal,
-    deleteAdminAction
+    deleteAdminAction,
+    openCancelScheduledClassModal: (scheduleId, classTime, modality) => {
+        const modalHtml = `
+            <div id="cancel-scheduled-class-modal" class="modal-overlay active">
+                <div class="modal-card" style="max-width: 480px;">
+                    <div class="modal-header">
+                        <h3>🚫 Registrar Aula Cancelada: ${escapeHtml(modality)}</h3>
+                        <button class="btn-close" onclick="app.closeModal('cancel-scheduled-class-modal')">✕</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 14px;">
+                            Informe o motivo pelo qual a aula das <strong>${escapeHtml(classTime)}</strong> não aconteceu hoje.
+                            <br><small style="color: #64748b;">Aulas canceladas ficam registradas no histórico sem distorcer a média de alunos no Dashboard.</small>
+                        </p>
+                        <div class="form-group">
+                            <label>MOTIVO DO CANCELAMENTO:</label>
+                            <select id="csc-reason" class="form-control">
+                                <option value="FERIADO">🏖️ Feriado / Recesso da Academia</option>
+                                <option value="FALTA_PROFESSOR">🤒 Falta / Atestado do Professor</option>
+                                <option value="MANUTENCAO">🔧 Manutenção / Sala Interditada (Som, Ar, etc.)</option>
+                                <option value="SEM_ALUNOS">👥 Sem Quórum de Alunos</option>
+                                <option value="CLIMA_EVENTO">⛈️ Clima / Evento Especial</option>
+                                <option value="OUTRO">📌 Outro Motivo</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>JUSTIFICATIVA / OBSERVAÇÕES (OPCIONAL):</label>
+                            <textarea id="csc-notes" class="form-control" rows="3" placeholder="Ex: Feriado municipal, manutenção no som da sala de coletivas..."></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline" onclick="app.closeModal('cancel-scheduled-class-modal')">Voltar</button>
+                        <button class="btn btn-danger" onclick="app.confirmCancelScheduledClass('${scheduleId}', '${classTime}', '${escapeHtml(modality)}')">
+                            🚫 Confirmar Cancelamento
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        injectModal(modalHtml);
+    },
+    confirmCancelScheduledClass: async (scheduleId, classTime, modality) => {
+        const teacher = state.currentUser?.teacher;
+        if (!teacher) return;
+        const today = new Date().toISOString().split('T')[0];
+        const cancelReason = document.getElementById('csc-reason')?.value || 'OUTRO';
+        const notes = document.getElementById('csc-notes')?.value?.trim() || '';
+
+        try {
+            await api.registerCancelledClass({
+                teacherId: teacher.id,
+                scheduleId,
+                classDate: today,
+                classTime,
+                modality,
+                cancelReason,
+                notes
+            });
+            closeModal('cancel-scheduled-class-modal');
+            showToast('🚫 Aula registrada como cancelada com sucesso.', 'info');
+            await loadTeacherData();
+        } catch (err) {
+            showToast(`Erro: ${err.message}`, 'danger');
+        }
+    },
+    openAdminCancelledClassModal: () => {
+        const today = new Date().toISOString().split('T')[0];
+        const modalHtml = `
+            <div id="admin-cancelled-class-modal" class="modal-overlay active">
+                <div class="modal-card" style="max-width: 520px;">
+                    <div class="modal-header">
+                        <h3>🚫 Registrar Aula Cancelada / Não Realizada</h3>
+                        <button class="btn-close" onclick="app.closeModal('admin-cancelled-class-modal')">✕</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="font-size: 0.84rem; color: #94a3b8; margin-bottom: 14px;">
+                            Registre quando uma aula da grade não aconteceu (feriado, falta de professor, manutenção). Ela ficará documentada sem puxar para baixo a média de alunos do Dashboard nem entrar na folha de pagamento.
+                        </p>
+
+                        <div class="form-group">
+                            <label>SELECIONAR DA GRADE REGULAR (OPCIONAL):</label>
+                            <select id="acc-schedule" class="form-control" onchange="app.onAdminCancelSchedulePick(this.value)">
+                                <option value="">-- Preencher manualmente ou escolher da grade --</option>
+                                ${state.schedules.map(sc => {
+                                    const d = DAYS_OF_WEEK.find(x => x.id === sc.day_of_week);
+                                    const tName = sc.teacher?.short_name || sc.teacher?.name || 'Prof';
+                                    return `<option value="${sc.id}" data-teacher="${sc.default_teacher_id}" data-time="${sc.start_time}" data-modality="${escapeHtml(sc.modality)}">${d ? d.short : ''} • ${sc.start_time} • ${escapeHtml(sc.modality)} (${escapeHtml(tName)})</option>`;
+                                }).join('')}
+                            </select>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px;">
+                            <div class="form-group">
+                                <label>DATA DA AULA:</label>
+                                <input type="date" id="acc-date" class="form-control" value="${today}">
+                            </div>
+                            <div class="form-group">
+                                <label>HORÁRIO:</label>
+                                <input type="time" id="acc-time" class="form-control" value="19:00">
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px;">
+                            <div class="form-group">
+                                <label>MODALIDADE:</label>
+                                <input type="text" id="acc-modality" class="form-control" placeholder="Ex: FitDance, Funcional...">
+                            </div>
+                            <div class="form-group">
+                                <label>PROFESSOR TITULAR:</label>
+                                <select id="acc-teacher" class="form-control">
+                                    <option value="">-- Selecione --</option>
+                                    ${state.teachers.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (${escapeHtml(t.short_name)})</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>MOTIVO DO CANCELAMENTO:</label>
+                            <select id="acc-reason" class="form-control">
+                                <option value="FERIADO">🏖️ Feriado / Recesso da Academia</option>
+                                <option value="FALTA_PROFESSOR">🤒 Falta / Atestado do Professor</option>
+                                <option value="MANUTENCAO">🔧 Manutenção / Sala Interditada (Som, Ar, etc.)</option>
+                                <option value="SEM_ALUNOS">👥 Sem Quórum de Alunos</option>
+                                <option value="CLIMA_EVENTO">⛈️ Clima / Evento Especial</option>
+                                <option value="OUTRO">📌 Outro Motivo</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>OBSERVAÇÕES / DETALHES:</label>
+                            <textarea id="acc-notes" class="form-control" rows="2" placeholder="Ex: Professor enviou atestado médico, não houve tempo hábil para substituto..."></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline" onclick="app.closeModal('admin-cancelled-class-modal')">Cancelar</button>
+                        <button class="btn btn-danger" onclick="app.submitAdminCancelledClass()">
+                            🚫 Salvar Aula Cancelada
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        injectModal(modalHtml);
+    },
+    onAdminCancelSchedulePick: (scheduleId) => {
+        const select = document.getElementById('acc-schedule');
+        if (!select || !scheduleId) return;
+        const opt = select.options[select.selectedIndex];
+        if (!opt) return;
+        const time = opt.getAttribute('data-time');
+        const modality = opt.getAttribute('data-modality');
+        const teacherId = opt.getAttribute('data-teacher');
+        if (time) document.getElementById('acc-time').value = time;
+        if (modality) document.getElementById('acc-modality').value = modality;
+        if (teacherId) document.getElementById('acc-teacher').value = teacherId;
+    },
+    submitAdminCancelledClass: async () => {
+        const scheduleId = document.getElementById('acc-schedule')?.value || null;
+        const classDate = document.getElementById('acc-date')?.value;
+        const classTime = document.getElementById('acc-time')?.value;
+        const modality = document.getElementById('acc-modality')?.value?.trim();
+        const teacherId = document.getElementById('acc-teacher')?.value;
+        const cancelReason = document.getElementById('acc-reason')?.value || 'OUTRO';
+        const notes = document.getElementById('acc-notes')?.value?.trim() || '';
+
+        if (!classDate || !classTime || !modality || !teacherId) {
+            showToast('Preencha data, horário, modalidade e professor.', 'warning');
+            return;
+        }
+
+        try {
+            await api.registerCancelledClass({
+                teacherId,
+                scheduleId,
+                classDate,
+                classTime,
+                modality,
+                cancelReason,
+                notes
+            });
+            closeModal('admin-cancelled-class-modal');
+            showToast('🚫 Aula cancelada registrada com sucesso!', 'success');
+            loadAdminTabData();
+        } catch (err) {
+            showToast(`Erro: ${err.message}`, 'danger');
+        }
+    },
+    deleteCancelledClassRecord: async (id) => {
+        if (!confirm('Deseja remover este registro de aula cancelada?')) return;
+        try {
+            await api.deleteCheckin(id);
+            showToast('🗑️ Registro de cancelamento removido.', 'info');
+            loadAdminTabData();
+        } catch (err) {
+            showToast(`Erro: ${err.message}`, 'danger');
+        }
+    }
 };
 
 // Iniciar a aplicação
