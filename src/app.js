@@ -764,8 +764,11 @@ async function renderFechamentoTab(container) {
                         <span class="month-title">${getMonthName(state.currentMonth)}</span>
                     </div>
                     <div class="toolbar-actions">
+                        <button class="btn btn-primary" onclick="app.exportClosureExcel()">
+                            📥 Baixar Planilha Excel (.XLSX)
+                        </button>
                         <button class="btn btn-outline" onclick="app.exportClosureCSV()">
-                            📥 Baixar Excel / CSV
+                            📄 Baixar CSV (Padrão Planilha)
                         </button>
                         <button class="btn btn-outline" onclick="app.printClosureReport()">
                             🖨️ Imprimir Relatório
@@ -861,6 +864,77 @@ async function renderFechamentoTab(container) {
                                 </tr>
                             </tfoot>
                         </table>
+                    </div>
+                </div>
+
+                <!-- Relatório Detalhado de Todas as Aulas por Professor (Padrão Planilha) -->
+                <div class="table-card" style="margin-top: 24px;">
+                    <div class="table-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <div>
+                            <h3>📑 Detalhamento de Todas as Aulas por Professor • ${getMonthName(state.currentMonth)}</h3>
+                            <small>Relação cronológica completa (Data, Modalidade, Valor de cada aula e Subtotal) idêntica à planilha</small>
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="app.exportClosureExcel()">
+                            📥 Exportar Planilha Completa (.XLSX)
+                        </button>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; padding: 16px;">
+                        ${summaryData.summaryList.map(teacher => {
+                            const sortedClasses = [...(teacher.classes || [])].sort((a, b) =>
+                                a.class_date.localeCompare(b.class_date) || (a.class_time || '').localeCompare(b.class_time || '')
+                            );
+                            return `
+                                <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; overflow: hidden;">
+                                    <div style="padding: 10px 14px; background: rgba(234, 88, 12, 0.12); border-bottom: 1px solid rgba(234, 88, 12, 0.25); display: flex; justify-content: space-between; align-items: center;">
+                                        <div>
+                                            <strong style="color: #f8fafc; font-size: 0.95rem;">${escapeHtml(teacher.name)}</strong>
+                                            <span class="nick-tag">(${escapeHtml(teacher.short_name)})</span>
+                                        </div>
+                                        <span class="badge-${teacher.payment_method === 'HOLERITE' ? 'holerite' : 'recibo'}" style="font-size: 0.72rem;">
+                                            ${teacher.payment_method === 'HOLERITE' ? 'Holerite' : 'Recibo'}
+                                        </span>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="data-table" style="font-size: 0.84rem;">
+                                            <thead>
+                                                <tr>
+                                                    <th>PROFESSOR(A)</th>
+                                                    <th>DATA</th>
+                                                    <th>AULA</th>
+                                                    <th class="text-right">VALOR</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                ${sortedClasses.length === 0 ? `
+                                                    <tr>
+                                                        <td colspan="4" class="text-center" style="color: #64748b; padding: 14px;">
+                                                            Nenhuma aula registrada neste mês
+                                                        </td>
+                                                    </tr>
+                                                ` : sortedClasses.map(c => `
+                                                    <tr>
+                                                        <td>${escapeHtml(teacher.short_name || teacher.name)}</td>
+                                                        <td>${formatDateBR(c.class_date)} <small style="color:#64748b;">${(c.class_time || '').slice(0, 5)}</small></td>
+                                                        <td>
+                                                            ${escapeHtml(c.modality)}
+                                                            ${c.is_substitution ? `<small style="color:#fb923c; display:block; font-size:0.7rem;">Subst. ${escapeHtml(c.original_teacher?.short_name || '')}</small>` : ''}
+                                                        </td>
+                                                        <td class="text-right font-bold">${formatCurrency(c.rate_applied)}</td>
+                                                    </tr>
+                                                `).join('')}
+                                            </tbody>
+                                            <tfoot>
+                                                <tr class="table-total-row" style="background: rgba(255,255,255,0.04);">
+                                                    <td colspan="2" class="text-right" style="color: #94a3b8; font-size: 0.78rem;">SUBTOTAL:</td>
+                                                    <td class="font-bold" style="color: #f8fafc;">${teacher.class_count} aulas</td>
+                                                    <td class="text-right font-bold" style="color: #ea580c;">${formatCurrency(teacher.total_amount)}</td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                 </div>
             </div>
@@ -2395,22 +2469,149 @@ function closeModal(modalId) {
 // Exportações e Relatórios do Gestor
 // ──────────────────────────────────────────────
 
+/**
+ * Constrói a matriz lado a lado idêntica à planilha oficial (COLETIVAS_AGOSTO_2026.xlsx):
+ * - Colunas A, B, C, D: Blocos individuais por professor (PROFESSORA | DATA | AULA | VALOR)
+ *   seguidos pela linha de subtotal ('', '', Quant. Aulas, Valor Total) e linhas em branco.
+ * - Coluna E: Espaço separador em branco.
+ * - Colunas F, G, H, I: Tabela consolidada (Nome | Quant. Aulas | Valor total | Obs:)
+ *   seguida pelo Total Geral, Total Holerite e Total Recibo.
+ */
+function buildClosureSpreadsheetMatrix(summary) {
+    const leftRows = [];
+    const rightRows = [];
+
+    // 1. Lado Direito (Colunas F..I): Tabela Consolidada de Fechamento
+    rightRows.push(['Nome', 'Quant. Aulas', 'Valor total', 'Obs:']);
+    summary.summaryList.forEach(s => {
+        const obsLabel = s.payment_method === 'HOLERITE' ? 'Holerite' : 'Recibo';
+        rightRows.push([
+            s.name,
+            Number(s.class_count || 0),
+            Number(s.total_amount || 0),
+            obsLabel
+        ]);
+    });
+    rightRows.push(['', '', '', '']);
+    rightRows.push(['TOTAL GERAL', Number(summary.totals.totalClasses || 0), Number(summary.totals.totalGeneral || 0), '']);
+    rightRows.push(['Total Holerite', '', Number(summary.totals.totalHolerite || 0), 'Holerite']);
+    rightRows.push(['Total Recibo', '', Number(summary.totals.totalRecibo || 0), 'Recibo']);
+
+    // 2. Lado Esquerdo (Colunas A..D): Blocos Individuais com TODAS as aulas de cada professor
+    summary.summaryList.forEach(teacher => {
+        const sortedClasses = [...(teacher.classes || [])].sort((a, b) =>
+            a.class_date.localeCompare(b.class_date) || (a.class_time || '').localeCompare(b.class_time || '')
+        );
+
+        // Cabeçalho do bloco do professor
+        leftRows.push(['PROFESSORA', 'DATA', 'AULA', 'VALOR']);
+
+        if (sortedClasses.length === 0) {
+            leftRows.push([teacher.short_name || teacher.name, '-', 'Sem aulas no mês', 0]);
+        } else {
+            sortedClasses.forEach(c => {
+                leftRows.push([
+                    teacher.short_name || teacher.name,
+                    formatDateBR(c.class_date),
+                    c.modality,
+                    Number(c.rate_applied || 0)
+                ]);
+            });
+        }
+
+        // Linha de subtotal do professor (Quant. de aulas na col C e Soma em R$ na col D)
+        leftRows.push(['', '', Number(teacher.class_count || 0), Number(teacher.total_amount || 0)]);
+
+        // Duas linhas em branco separando um professor do próximo (igual à planilha modelo)
+        leftRows.push(['', '', '', '']);
+        leftRows.push(['', '', '', '']);
+    });
+
+    // 3. Unificar Lado Esquerdo (A..D) + Coluna E vazia + Lado Direito (F..I)
+    const maxRows = Math.max(leftRows.length, rightRows.length);
+    const matrix = [];
+
+    // Duas linhas iniciais em branco no topo (igual às linhas 1 e 2 da planilha modelo)
+    matrix.push(['', '', '', '', '', '', '', '', '']);
+    matrix.push(['', '', '', '', '', '', '', '', '']);
+
+    for (let i = 0; i < maxRows; i++) {
+        const left = leftRows[i] || ['', '', '', ''];
+        const right = rightRows[i] || ['', '', '', ''];
+        matrix.push([
+            left[0], left[1], left[2], left[3],
+            '',
+            right[0], right[1], right[2], right[3]
+        ]);
+    }
+
+    return matrix;
+}
+
+function exportClosureExcel() {
+    const summary = state.adminSummary;
+    if (!summary) {
+        showToast('Aguarde o carregamento do fechamento.', 'warning');
+        return;
+    }
+
+    if (typeof window.XLSX === 'undefined') {
+        exportClosureCSV();
+        return;
+    }
+
+    try {
+        const matrix = buildClosureSpreadsheetMatrix(summary);
+        const ws = window.XLSX.utils.aoa_to_sheet(matrix);
+
+        // Ajustar largura das colunas para visualização limpa no Excel
+        ws['!cols'] = [
+            { wch: 18 }, // A: PROFESSORA
+            { wch: 14 }, // B: DATA
+            { wch: 18 }, // C: AULA / Subtotal Qtd
+            { wch: 12 }, // D: VALOR / Subtotal R$
+            { wch: 6 },  // E: Espaço
+            { wch: 34 }, // F: Nome Completo
+            { wch: 14 }, // G: Quant. Aulas
+            { wch: 14 }, // H: Valor total
+            { wch: 14 }  // I: Obs (Holerite / Recibo)
+        ];
+
+        const wb = window.XLSX.utils.book_new();
+        const sheetName = `COLETIVAS_${state.currentMonth}`.slice(0, 31);
+        window.XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+        window.XLSX.writeFile(wb, `COLETIVAS_${state.currentMonth}.xlsx`);
+        showToast('📥 Planilha Excel (.XLSX) baixada no formato oficial!', 'success');
+    } catch (err) {
+        console.error('Erro ao gerar XLSX:', err);
+        exportClosureCSV();
+    }
+}
+
 function exportClosureCSV() {
     const summary = state.adminSummary;
     if (!summary) return;
 
-    let csv = `Nome;Apelido;Quant. Aulas;Valor Unitario (R$);Valor Total (R$);Forma de Pagamento\n`;
-    summary.summaryList.forEach(s => {
-        csv += `"${s.name}";"${s.short_name}";${s.class_count};"${s.rate_per_class.toFixed(2).replace('.', ',')}";"${s.total_amount.toFixed(2).replace('.', ',')}";"${s.payment_method}"\n`;
-    });
-    csv += `"TOTAL CONSOLIDADO";"";${summary.totals.totalClasses};"";"${summary.totals.totalGeneral.toFixed(2).replace('.', ',')}";""\n`;
+    const matrix = buildClosureSpreadsheetMatrix(summary);
+    const csvLines = matrix.map(row =>
+        row.map(cell => {
+            if (cell === null || cell === undefined || cell === '') return '';
+            if (typeof cell === 'number') {
+                return Number.isInteger(cell) ? String(cell) : cell.toFixed(2).replace('.', ',');
+            }
+            const str = String(cell).replace(/"/g, '""');
+            return `"${str}"`;
+        }).join(';')
+    );
 
+    const csv = csvLines.join('\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `fechamento_coletivas_${state.currentMonth}.csv`;
+    link.download = `COLETIVAS_${state.currentMonth}.csv`;
     link.click();
-    showToast('📁 Relatório CSV baixado com sucesso!', 'success');
+    showToast('📁 Relatório CSV (padrão planilha) baixado com sucesso!', 'success');
 }
 
 function printClosureReport() {
@@ -2990,6 +3191,7 @@ window.app = {
         showToast('Biometria desativada deste aparelho.', 'info');
         renderApp();
     },
+    exportClosureExcel,
     exportClosureCSV,
     printClosureReport,
     copyWhatsappSummary,
