@@ -1640,6 +1640,11 @@ function renderSubstituicaoTab(container) {
                 </div>
 
                 <div class="form-group" style="margin-top: 16px;">
+                    <label>QUANTIDADE DE ALUNOS PRESENTES NA AULA:</label>
+                    <input type="number" id="admin-subst-students" class="form-control" min="0" max="200" value="10" placeholder="Ex: 15">
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
                     <label>MOTIVO / OBSERVAÇÃO DO ACORDO:</label>
                     <input type="text" id="admin-subst-notes" class="form-control" placeholder="Ex: Titular em consulta médica, combinado previamente com a gestão">
                 </div>
@@ -1805,7 +1810,11 @@ async function renderRegistrosTab(container) {
                                             ${c.modality}
                                             ${c.notes ? `<div style="font-size: 0.75rem; color: #94a3b8; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${c.notes}">📝 ${c.notes}</div>` : ''}
                                         </td>
-                                        <td><strong>${c.students_count || 0}</strong></td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline" style="padding: 3px 8px; font-weight: 800;" onclick="app.editCheckinStudents('${c.id}', ${c.students_count || 0})" title="Clique para corrigir a quantidade de alunos">
+                                                ${c.students_count || 0} ✏️
+                                            </button>
+                                        </td>
                                         <td>
                                             ${c.is_substitution ? `
                                                 <span class="badge-subst">Substituiu ${c.original_teacher?.short_name || 'Colega'}</span>
@@ -2159,7 +2168,11 @@ function openTeacherClassesDetail(teacherId) {
                                         <td><strong>${formatDateBr(c.class_date)}</strong></td>
                                         <td>${c.class_time}</td>
                                         <td><strong>${c.modality}</strong></td>
-                                        <td class="text-center"><strong>${c.students_count || 0}</strong></td>
+                                        <td class="text-center">
+                                            <button class="btn btn-sm btn-outline" style="padding: 3px 8px; font-weight: 800;" onclick="app.editCheckinStudents('${c.id}', ${c.students_count || 0}, '${teacherId}')" title="Clique para corrigir a quantidade de alunos">
+                                                ${c.students_count || 0} ✏️
+                                            </button>
+                                        </td>
                                         <td>
                                             ${c.is_substitution ? `
                                                 <span class="badge-subst">Substituiu ${c.original_teacher?.short_name || 'Colega'}</span>
@@ -2306,6 +2319,18 @@ function openManualCheckinModal() {
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
+                        <label>PUXAR DA GRADE REGULAR (OPCIONAL - PREENCHE AUTOMÁTICO):</label>
+                        <select id="mc-schedule" class="form-control" onchange="app.onManualCheckinSchedulePick(this.value)">
+                            <option value="">-- Preencher manualmente ou escolher da grade --</option>
+                            ${state.schedules.map(sc => {
+                                const d = DAYS_OF_WEEK.find(x => x.id === sc.day_of_week);
+                                const tName = sc.teacher?.short_name || sc.teacher?.name || 'Prof';
+                                return `<option value="${sc.id}" data-teacher="${sc.default_teacher_id}" data-time="${sc.start_time}" data-modality="${escapeHtml(sc.modality)}">[${d ? d.short : ''}] ${sc.start_time} • ${escapeHtml(sc.modality)} (${escapeHtml(tName)})</option>`;
+                            }).join('')}
+                        </select>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 12px;">
                         <label>PROFESSOR QUE MINISTROU:</label>
                         <select id="mc-teacher" class="form-control">
                             ${state.teachers.map(t => `
@@ -2325,14 +2350,20 @@ function openManualCheckinModal() {
                         </div>
                     </div>
 
-                    <div class="form-group" style="margin-top: 12px;">
-                        <label>MODALIDADE:</label>
-                        <input type="text" id="mc-modality" class="form-control" placeholder="Ex: FitDance, Jump, Pilates...">
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 12px;">
+                        <div class="form-group">
+                            <label>MODALIDADE:</label>
+                            <input type="text" id="mc-modality" class="form-control" placeholder="Ex: FitDance, Jump, Pilates...">
+                        </div>
+                        <div class="form-group">
+                            <label>ALUNOS PRESENTES:</label>
+                            <input type="number" id="mc-students" class="form-control" min="0" max="200" value="10" placeholder="Qtd">
+                        </div>
                     </div>
 
                     <div class="form-group" style="margin-top: 12px;">
                         <label>MOTIVO DO LANÇAMENTO MANUAL:</label>
-                        <input type="text" id="mc-notes" class="form-control" placeholder="Ex: Professor esqueceu o celular">
+                        <input type="text" id="mc-notes" class="form-control" placeholder="Ex: Professor esqueceu de registrar">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -2644,6 +2675,7 @@ window.app = {
         const date = document.getElementById('admin-subst-date')?.value;
         const selectSched = document.getElementById('admin-subst-schedule');
         const coveringTeacherId = document.getElementById('admin-subst-covering-teacher')?.value;
+        const studentsCount = Number(document.getElementById('admin-subst-students')?.value) || 0;
         const notes = document.getElementById('admin-subst-notes')?.value?.trim();
 
         if (!date || !selectSched?.value || !coveringTeacherId) {
@@ -2665,6 +2697,7 @@ window.app = {
                 modality: modality,
                 isSubstitution: true,
                 originalTeacherId: origTeacherId,
+                studentsCount,
                 notes: notes ? `Substituição aprovada pela gestão: ${notes}` : 'Substituição aprovada pela gestão'
             });
 
@@ -2752,11 +2785,25 @@ window.app = {
         }
     },
     openManualCheckinModal,
+    onManualCheckinSchedulePick: (scheduleId) => {
+        const select = document.getElementById('mc-schedule');
+        if (!select || !scheduleId) return;
+        const opt = select.options[select.selectedIndex];
+        if (!opt) return;
+        const time = opt.getAttribute('data-time');
+        const modality = opt.getAttribute('data-modality');
+        const teacherId = opt.getAttribute('data-teacher');
+        if (time) document.getElementById('mc-time').value = time;
+        if (modality) document.getElementById('mc-modality').value = modality;
+        if (teacherId) document.getElementById('mc-teacher').value = teacherId;
+    },
     saveManualCheckin: async () => {
+        const scheduleId = document.getElementById('mc-schedule')?.value || null;
         const teacherId = document.getElementById('mc-teacher')?.value;
         const date = document.getElementById('mc-date')?.value;
         const time = document.getElementById('mc-time')?.value;
         const modality = document.getElementById('mc-modality')?.value?.trim();
+        const studentsCount = Number(document.getElementById('mc-students')?.value) || 0;
         const notes = document.getElementById('mc-notes')?.value?.trim();
 
         if (!teacherId || !date || !time || !modality) {
@@ -2773,10 +2820,12 @@ window.app = {
         try {
             await api.createCheckin({
                 teacherId,
+                scheduleId,
                 classDate: date,
                 classTime: time,
                 modality,
                 isSubstitution: false,
+                studentsCount,
                 notes: notes ? `Lançamento manual: ${notes}` : 'Lançamento manual pela gestão'
             });
             closeModal('manual-checkin-modal');
@@ -2843,7 +2892,9 @@ window.app = {
             // 2. Se a aba de fechamento estiver aberta no fundo, recarregar a tabela
             if (currentAdminTab === 'fechamento') {
                 const main = document.getElementById('admin-view-content');
-                if (main) renderAdminClosureTab(main);
+                if (main) await renderFechamentoTab(main);
+            } else {
+                loadAdminTabData();
             }
 
             // 3. Atualizar o modal do professor com os novos dados
@@ -2852,6 +2903,32 @@ window.app = {
             }
         } catch (err) {
             showToast(`Erro ao excluir aula: ${err.message}`, 'danger');
+        }
+    },
+    editCheckinStudents: async (checkinId, currentCount, teacherId = null) => {
+        const input = prompt('Informe a quantidade correta de alunos presentes nesta aula:', String(currentCount ?? 0));
+        if (input === null) return;
+        const parsed = parseInt(input, 10);
+        if (isNaN(parsed) || parsed < 0) {
+            showToast('Digite um número válido de alunos (0 ou mais).', 'warning');
+            return;
+        }
+        try {
+            await api.updateCheckinStudents(checkinId, parsed);
+            showToast(`✅ Quantidade de alunos atualizada para ${parsed}!`, 'success');
+            const freshSummary = await api.getMonthClosureSummary(state.currentMonth);
+            state.adminSummary = freshSummary;
+            if (currentAdminTab === 'fechamento') {
+                const main = document.getElementById('admin-view-content');
+                if (main) await renderFechamentoTab(main);
+            } else {
+                loadAdminTabData();
+            }
+            if (teacherId && document.getElementById('teacher-detail-modal')) {
+                openTeacherClassesDetail(teacherId);
+            }
+        } catch (err) {
+            showToast(`Erro ao atualizar alunos: ${err.message}`, 'danger');
         }
     },
     closeModal,

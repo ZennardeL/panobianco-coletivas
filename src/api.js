@@ -565,6 +565,16 @@ export async function cancelCheckin(checkinId) {
     return true;
 }
 
+export async function updateCheckinStudents(checkinId, studentsCount) {
+    const sb = getClient();
+    const { error } = await sb
+        .from('coletivas_checkins')
+        .update({ students_count: Math.max(0, Number(studentsCount) || 0) })
+        .eq('id', checkinId);
+    if (error) throw error;
+    return true;
+}
+
 export async function deleteCheckin(checkinId) {
     const sb = getClient();
     const { error } = await sb
