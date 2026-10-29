@@ -55,6 +55,7 @@ function formatDateBr(dateStr) {
     const [y, m, d] = dateStr.split('-');
     return `${d}/${m}/${y}`;
 }
+const formatDateBR = formatDateBr;
 
 function getMonthName(yearMonthStr) {
     const [y, m] = yearMonthStr.split('-');
