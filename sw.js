@@ -1,4 +1,4 @@
-const CACHE_NAME = 'panobianco-coletivas-v1.0.0';
+const CACHE_NAME = 'panobianco-coletivas-v1.0.2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -30,7 +30,10 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-  // Network first, fallback to cache
+  // Nunca interceptar chamadas externas (Supabase REST/Storage/Realtime, CDNs, etc.)
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
+  // Network first, fallback to cache apenas para arquivos estáticos locais
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
