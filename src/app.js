@@ -766,13 +766,10 @@ async function renderFechamentoTab(container) {
                     </div>
                     <div class="toolbar-actions">
                         <button class="btn btn-primary" onclick="app.exportClosureExcel()">
-                            📥 Baixar Planilha Excel (.XLSX)
-                        </button>
-                        <button class="btn btn-outline" onclick="app.exportClosureCSV()">
-                            📄 Baixar CSV (Padrão Planilha)
+                            📥 Baixar Planilha p/ Contabilidade (.XLSX)
                         </button>
                         <button class="btn btn-outline" onclick="app.printClosureReport()">
-                            🖨️ Imprimir Relatório
+                            🖨️ Imprimir / Salvar PDF
                         </button>
                         <button class="btn btn-whatsapp" onclick="app.copyWhatsappSummary()">
                             💬 Copiar p/ WhatsApp
@@ -2482,21 +2479,22 @@ function buildClosureSpreadsheetMatrix(summary) {
     const leftRows = [];
     const rightRows = [];
 
-    // 1. Lado Direito (Colunas F..I): Tabela Consolidada de Fechamento
-    rightRows.push(['Nome', 'Quant. Aulas', 'Valor total', 'Obs:']);
+    // 1. Lado Direito (Colunas F..J): Tabela Consolidada de Fechamento
+    rightRows.push(['Nome Completo do Professor(a)', 'Quant. Aulas', 'Valor / Aula (R$)', 'Valor Total (R$)', 'Forma Pagto (Obs.)']);
     summary.summaryList.forEach(s => {
         const obsLabel = s.payment_method === 'HOLERITE' ? 'Holerite' : 'Recibo';
         rightRows.push([
             s.name,
             Number(s.class_count || 0),
-            Number(s.total_amount || 0),
+            formatCurrency(s.rate_per_class || 0),
+            formatCurrency(s.total_amount || 0),
             obsLabel
         ]);
     });
-    rightRows.push(['', '', '', '']);
-    rightRows.push(['TOTAL GERAL', Number(summary.totals.totalClasses || 0), Number(summary.totals.totalGeneral || 0), '']);
-    rightRows.push(['Total Holerite', '', Number(summary.totals.totalHolerite || 0), 'Holerite']);
-    rightRows.push(['Total Recibo', '', Number(summary.totals.totalRecibo || 0), 'Recibo']);
+    rightRows.push(['', '', '', '', '']);
+    rightRows.push(['TOTAL GERAL DO MÊS', Number(summary.totals.totalClasses || 0), '-', formatCurrency(summary.totals.totalGeneral || 0), 'FECHAMENTO']);
+    rightRows.push(['Total Holerite (Folha CLT)', '', '-', formatCurrency(summary.totals.totalHolerite || 0), 'Holerite']);
+    rightRows.push(['Total Recibo (Autônomo / RPA)', '', '-', formatCurrency(summary.totals.totalRecibo || 0), 'Recibo']);
 
     // 2. Lado Esquerdo (Colunas A..D): Blocos Individuais com TODAS as aulas de cada professor
     summary.summaryList.forEach(teacher => {
@@ -2504,45 +2502,41 @@ function buildClosureSpreadsheetMatrix(summary) {
             a.class_date.localeCompare(b.class_date) || (a.class_time || '').localeCompare(b.class_time || '')
         );
 
-        // Cabeçalho do bloco do professor
-        leftRows.push(['PROFESSORA', 'DATA', 'AULA', 'VALOR']);
+        leftRows.push([`PROFESSOR(A): ${teacher.name.toUpperCase()}`, '', '', teacher.payment_method]);
+        leftRows.push(['PROFESSOR(A)', 'DATA DA AULA', 'MODALIDADE / AULA', 'VALOR (R$)']);
 
         if (sortedClasses.length === 0) {
-            leftRows.push([teacher.short_name || teacher.name, '-', 'Sem aulas no mês', 0]);
+            leftRows.push([teacher.short_name || teacher.name, '-', 'Sem aulas no mês', formatCurrency(0)]);
         } else {
             sortedClasses.forEach(c => {
                 leftRows.push([
                     teacher.short_name || teacher.name,
                     formatDateBR(c.class_date),
-                    c.modality,
-                    Number(c.rate_applied || 0)
+                    c.is_substitution ? `${c.modality} (Subst.)` : c.modality,
+                    formatCurrency(c.rate_applied || 0)
                 ]);
             });
         }
 
-        // Linha de subtotal do professor (Quant. de aulas na col C e Soma em R$ na col D)
-        leftRows.push(['', '', Number(teacher.class_count || 0), Number(teacher.total_amount || 0)]);
-
-        // Duas linhas em branco separando um professor do próximo (igual à planilha modelo)
+        leftRows.push([`SUBTOTAL (${teacher.short_name || teacher.name}):`, '', `${Number(teacher.class_count || 0)} aulas`, formatCurrency(teacher.total_amount || 0)]);
         leftRows.push(['', '', '', '']);
         leftRows.push(['', '', '', '']);
     });
 
-    // 3. Unificar Lado Esquerdo (A..D) + Coluna E vazia + Lado Direito (F..I)
+    // 3. Unificar Lado Esquerdo (A..D) + Coluna E vazia + Lado Direito (F..J)
     const maxRows = Math.max(leftRows.length, rightRows.length);
     const matrix = [];
 
-    // Duas linhas iniciais em branco no topo (igual às linhas 1 e 2 da planilha modelo)
-    matrix.push(['', '', '', '', '', '', '', '', '']);
-    matrix.push(['', '', '', '', '', '', '', '', '']);
+    matrix.push([`PANOBIANCO ACADEMIA (BOITUVA) — FECHAMENTO CONTÁBIL DE COLETIVAS (${getMonthName(state.currentMonth).toUpperCase()})`, '', '', '', '', '', '', '', '', '']);
+    matrix.push(['', '', '', '', '', '', '', '', '', '']);
 
     for (let i = 0; i < maxRows; i++) {
         const left = leftRows[i] || ['', '', '', ''];
-        const right = rightRows[i] || ['', '', '', ''];
+        const right = rightRows[i] || ['', '', '', '', ''];
         matrix.push([
             left[0], left[1], left[2], left[3],
             '',
-            right[0], right[1], right[2], right[3]
+            right[0], right[1], right[2], right[3], right[4]
         ]);
     }
 
@@ -2562,28 +2556,496 @@ function exportClosureExcel() {
     }
 
     try {
-        const matrix = buildClosureSpreadsheetMatrix(summary);
-        const ws = window.XLSX.utils.aoa_to_sheet(matrix);
+        const XLSX = window.XLSX;
+        const ws = {};
+        const merges = [];
+        const rowsMeta = [];
 
-        // Ajustar largura das colunas para visualização limpa no Excel
+        const thinBorder = {
+            top: { style: 'thin', color: { rgb: 'CBD5E1' } },
+            bottom: { style: 'thin', color: { rgb: 'CBD5E1' } },
+            left: { style: 'thin', color: { rgb: 'CBD5E1' } },
+            right: { style: 'thin', color: { rgb: 'CBD5E1' } }
+        };
+
+        const subtotalBorder = {
+            top: { style: 'medium', color: { rgb: 'EA580C' } },
+            bottom: { style: 'medium', color: { rgb: 'EA580C' } },
+            left: { style: 'thin', color: { rgb: 'FDBA74' } },
+            right: { style: 'thin', color: { rgb: 'FDBA74' } }
+        };
+
+        const CURRENCY_FMT = '"R$" #,##0.00';
+        const CLASSES_FMT = '0" aulas"';
+
+        function setCell(colIdx, rowNumber1Based, cellObj) {
+            const ref = XLSX.utils.encode_cell({ c: colIdx, r: rowNumber1Based - 1 });
+            ws[ref] = cellObj;
+        }
+
+        // ── 1. Cabeçalho Institucional no Topo (Linhas 1 e 2, Colunas A..J) ──
+        const titleStyle = {
+            font: { name: 'Calibri', sz: 13, bold: true, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: '0F172A' } },
+            alignment: { horizontal: 'center', vertical: 'center' }
+        };
+        const subtitleStyle = {
+            font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: 'EA580C' } },
+            alignment: { horizontal: 'center', vertical: 'center' }
+        };
+
+        for (let c = 0; c <= 9; c++) {
+            setCell(c, 1, {
+                t: 's',
+                v: c === 0 ? 'PANOBIANCO ACADEMIA (UNIDADE BOITUVA) — FECHAMENTO CONTÁBIL DE AULAS COLETIVAS' : '',
+                s: titleStyle
+            });
+            setCell(c, 2, {
+                t: 's',
+                v: c === 0 ? `MÊS DE REFERÊNCIA: ${getMonthName(state.currentMonth).toUpperCase()} • APURAÇÃO DE HORAS-AULA (HOLERITE & RECIBO)` : '',
+                s: subtitleStyle
+            });
+        }
+        merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } });
+        merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: 9 } });
+        rowsMeta[0] = { hpt: 28 };
+        rowsMeta[1] = { hpt: 22 };
+        rowsMeta[2] = { hpt: 12 };
+
+        // ── 2. Lado Esquerdo (Colunas A..D): Blocos Individuais por Professor ──
+        let currentLeftRow = 4; // Começa na linha 4 do Excel
+        const teacherSubtotalRefs = []; // Guarda a linha de subtotal de cada professor para vincular na tabela da direita
+
+        summary.summaryList.forEach(teacher => {
+            const sortedClasses = [...(teacher.classes || [])].sort((a, b) =>
+                a.class_date.localeCompare(b.class_date) || (a.class_time || '').localeCompare(b.class_time || '')
+            );
+
+            // Faixa de identificação do professor (Mesclada A..D)
+            const profBannerStyle = {
+                font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+                fill: { fgColor: { rgb: '1E293B' } },
+                alignment: { horizontal: 'left', vertical: 'center' },
+                border: thinBorder
+            };
+            const payBadgeText = teacher.payment_method === 'HOLERITE' ? 'HOLERITE' : 'RECIBO';
+            for (let c = 0; c <= 3; c++) {
+                setCell(c, currentLeftRow, {
+                    t: 's',
+                    v: c === 0 ? `PROFESSOR(A): ${teacher.name.toUpperCase()} (${teacher.short_name}) • ${payBadgeText}` : '',
+                    s: profBannerStyle
+                });
+            }
+            merges.push({ s: { r: currentLeftRow - 1, c: 0 }, e: { r: currentLeftRow - 1, c: 3 } });
+            rowsMeta[currentLeftRow - 1] = { hpt: 21 };
+            currentLeftRow++;
+
+            // Cabeçalho das colunas do bloco (PROFESSORA | DATA | AULA | VALOR)
+            const colHeaders = ['PROFESSOR(A)', 'DATA DA AULA', 'MODALIDADE / AULA', 'VALOR (R$)'];
+            colHeaders.forEach((hText, cIdx) => {
+                setCell(cIdx, currentLeftRow, {
+                    t: 's',
+                    v: hText,
+                    s: {
+                        font: { name: 'Calibri', sz: 9.5, bold: true, color: { rgb: 'F8FAFC' } },
+                        fill: { fgColor: { rgb: '334155' } },
+                        alignment: { horizontal: cIdx === 3 ? 'right' : 'center', vertical: 'center' },
+                        border: thinBorder
+                    }
+                });
+            });
+            rowsMeta[currentLeftRow - 1] = { hpt: 19 };
+            currentLeftRow++;
+
+            const startClassRow = currentLeftRow;
+
+            if (sortedClasses.length === 0) {
+                const emptyStyle = {
+                    font: { name: 'Calibri', sz: 9.5, italic: true, color: { rgb: '64748B' } },
+                    fill: { fgColor: { rgb: 'F8FAFC' } },
+                    alignment: { horizontal: 'center', vertical: 'center' },
+                    border: thinBorder
+                };
+                setCell(0, currentLeftRow, { t: 's', v: teacher.short_name || teacher.name, s: emptyStyle });
+                setCell(1, currentLeftRow, { t: 's', v: '-', s: emptyStyle });
+                setCell(2, currentLeftRow, { t: 's', v: 'Sem aulas no mês', s: emptyStyle });
+                setCell(3, currentLeftRow, {
+                    t: 'n',
+                    v: 0,
+                    z: CURRENCY_FMT,
+                    s: { ...emptyStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+                });
+                rowsMeta[currentLeftRow - 1] = { hpt: 18 };
+                currentLeftRow++;
+            } else {
+                sortedClasses.forEach((c, idx) => {
+                    const rowBg = idx % 2 === 0 ? 'FFFFFF' : 'F8FAFC';
+                    const baseRowStyle = {
+                        font: { name: 'Calibri', sz: 10, color: { rgb: '0F172A' } },
+                        fill: { fgColor: { rgb: rowBg } },
+                        border: thinBorder
+                    };
+                    const modalityLabel = c.is_substitution ? `${c.modality} (Subst.)` : c.modality;
+
+                    setCell(0, currentLeftRow, {
+                        t: 's',
+                        v: teacher.short_name || teacher.name,
+                        s: { ...baseRowStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+                    });
+                    setCell(1, currentLeftRow, {
+                        t: 's',
+                        v: formatDateBR(c.class_date),
+                        s: { ...baseRowStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+                    });
+                    setCell(2, currentLeftRow, {
+                        t: 's',
+                        v: modalityLabel,
+                        s: { ...baseRowStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+                    });
+                    setCell(3, currentLeftRow, {
+                        t: 'n',
+                        v: Number(c.rate_applied || 0),
+                        z: CURRENCY_FMT,
+                        s: {
+                            ...baseRowStyle,
+                            alignment: { horizontal: 'right', vertical: 'center' },
+                            numFmt: CURRENCY_FMT
+                        }
+                    });
+                    rowsMeta[currentLeftRow - 1] = { hpt: 18 };
+                    currentLeftRow++;
+                });
+            }
+
+            const endClassRow = currentLeftRow - 1;
+            const subtotalRow = currentLeftRow;
+
+            // Linha de Subtotal do Professor com FÓRMULAS REAIS DO EXCEL (=COUNTA e =SUM)
+            const subBaseStyle = {
+                font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '9A3412' } },
+                fill: { fgColor: { rgb: 'FFEDD5' } },
+                border: subtotalBorder
+            };
+
+            setCell(0, subtotalRow, {
+                t: 's',
+                v: `SUBTOTAL (${(teacher.short_name || teacher.name).toUpperCase()}):`,
+                s: { ...subBaseStyle, alignment: { horizontal: 'right', vertical: 'center' } }
+            });
+            setCell(1, subtotalRow, {
+                t: 's',
+                v: '',
+                s: { ...subBaseStyle, alignment: { horizontal: 'right', vertical: 'center' } }
+            });
+            merges.push({ s: { r: subtotalRow - 1, c: 0 }, e: { r: subtotalRow - 1, c: 1 } });
+
+            if (sortedClasses.length > 0) {
+                setCell(2, subtotalRow, {
+                    t: 'n',
+                    f: `COUNTA(C${startClassRow}:C${endClassRow})`,
+                    v: Number(teacher.class_count || 0),
+                    z: CLASSES_FMT,
+                    s: { ...subBaseStyle, alignment: { horizontal: 'center', vertical: 'center' }, numFmt: CLASSES_FMT }
+                });
+                setCell(3, subtotalRow, {
+                    t: 'n',
+                    f: `SUM(D${startClassRow}:D${endClassRow})`,
+                    v: Number(teacher.total_amount || 0),
+                    z: CURRENCY_FMT,
+                    s: { ...subBaseStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+                });
+            } else {
+                setCell(2, subtotalRow, {
+                    t: 'n',
+                    v: 0,
+                    z: CLASSES_FMT,
+                    s: { ...subBaseStyle, alignment: { horizontal: 'center', vertical: 'center' }, numFmt: CLASSES_FMT }
+                });
+                setCell(3, subtotalRow, {
+                    t: 'n',
+                    v: 0,
+                    z: CURRENCY_FMT,
+                    s: { ...subBaseStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+                });
+            }
+
+            rowsMeta[subtotalRow - 1] = { hpt: 21 };
+            teacherSubtotalRefs.push({ teacher, subtotalRow });
+
+            // Espaço em branco antes do próximo professor
+            currentLeftRow += 2;
+        });
+
+        // ── 3. Lado Direito (Colunas F..J): Quadro Resumo para Contabilidade ──
+        const summaryBannerRow = 4;
+        const summaryHeaderRow = 5;
+
+        const rightBannerStyle = {
+            font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: '0F172A' } },
+            alignment: { horizontal: 'center', vertical: 'center' },
+            border: thinBorder
+        };
+        for (let c = 5; c <= 9; c++) {
+            setCell(c, summaryBannerRow, {
+                t: 's',
+                v: c === 5 ? 'QUADRO RESUMO PARA CONTABILIDADE — FOLHA DE PAGAMENTO & RECIBOS' : '',
+                s: rightBannerStyle
+            });
+        }
+        merges.push({ s: { r: summaryBannerRow - 1, c: 5 }, e: { r: summaryBannerRow - 1, c: 9 } });
+
+        const rightHeaders = [
+            { label: 'Nome Completo do Professor(a)', align: 'left' },
+            { label: 'Quant. Aulas', align: 'center' },
+            { label: 'Valor / Aula', align: 'right' },
+            { label: 'Valor Total (R$)', align: 'right' },
+            { label: 'Forma Pagto (Obs.)', align: 'center' }
+        ];
+        rightHeaders.forEach((h, idx) => {
+            setCell(5 + idx, summaryHeaderRow, {
+                t: 's',
+                v: h.label,
+                s: {
+                    font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+                    fill: { fgColor: { rgb: '1E293B' } },
+                    alignment: { horizontal: h.align, vertical: 'center' },
+                    border: thinBorder
+                }
+            });
+        });
+
+        const firstSummaryDataRow = 6;
+        teacherSubtotalRefs.forEach(({ teacher, subtotalRow }, idx) => {
+            const rNum = firstSummaryDataRow + idx;
+            const rowBg = idx % 2 === 0 ? 'FFFFFF' : 'F8FAFC';
+            const isHolerite = teacher.payment_method === 'HOLERITE';
+            const obsLabel = isHolerite ? 'Holerite' : 'Recibo';
+
+            const cellBase = {
+                font: { name: 'Calibri', sz: 10, color: { rgb: '0F172A' } },
+                fill: { fgColor: { rgb: rowBg } },
+                border: thinBorder
+            };
+
+            // F: Nome Completo
+            setCell(5, rNum, {
+                t: 's',
+                v: teacher.name,
+                s: {
+                    ...cellBase,
+                    font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '0F172A' } },
+                    alignment: { horizontal: 'left', vertical: 'center' }
+                }
+            });
+
+            // G: Quant. Aulas (Vinculada via fórmula =C{subtotalRow} ao bloco do professor)
+            setCell(6, rNum, {
+                t: 'n',
+                f: `C${subtotalRow}`,
+                v: Number(teacher.class_count || 0),
+                z: '0',
+                s: {
+                    ...cellBase,
+                    font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: '0F172A' } },
+                    alignment: { horizontal: 'center', vertical: 'center' },
+                    numFmt: '0'
+                }
+            });
+
+            // H: Valor Unitário da Hora-Aula
+            setCell(7, rNum, {
+                t: 'n',
+                v: Number(teacher.rate_per_class || 0),
+                z: CURRENCY_FMT,
+                s: {
+                    ...cellBase,
+                    alignment: { horizontal: 'right', vertical: 'center' },
+                    numFmt: CURRENCY_FMT
+                }
+            });
+
+            // I: Valor Total (Fórmula =G*H quando taxa uniforme ou =D{subtotalRow})
+            const expectedUniform = Number(teacher.class_count || 0) * Number(teacher.rate_per_class || 0);
+            const formulaTotal = Math.abs(expectedUniform - Number(teacher.total_amount || 0)) < 0.01
+                ? `G${rNum}*H${rNum}`
+                : `D${subtotalRow}`;
+
+            setCell(8, rNum, {
+                t: 'n',
+                f: formulaTotal,
+                v: Number(teacher.total_amount || 0),
+                z: CURRENCY_FMT,
+                s: {
+                    ...cellBase,
+                    font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: 'C2410C' } },
+                    alignment: { horizontal: 'right', vertical: 'center' },
+                    numFmt: CURRENCY_FMT
+                }
+            });
+
+            // J: Forma de Pagamento (Holerite em Azul / Recibo em Verde)
+            setCell(9, rNum, {
+                t: 's',
+                v: obsLabel,
+                s: {
+                    font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: isHolerite ? '1E40AF' : '166534' } },
+                    fill: { fgColor: { rgb: isHolerite ? 'DBEAFE' : 'DCFCE7' } },
+                    alignment: { horizontal: 'center', vertical: 'center' },
+                    border: thinBorder
+                }
+            });
+
+            if (!rowsMeta[rNum - 1]) rowsMeta[rNum - 1] = { hpt: 20 };
+        });
+
+        const lastSummaryDataRow = Math.max(firstSummaryDataRow, firstSummaryDataRow + teacherSubtotalRefs.length - 1);
+        const totalGeneralRow = lastSummaryDataRow + 2;
+        const totalHoleriteRow = lastSummaryDataRow + 3;
+        const totalReciboRow = lastSummaryDataRow + 4;
+
+        // Linha: TOTAL GERAL DO MÊS
+        const grandTotalStyle = {
+            font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: 'EA580C' } },
+            border: subtotalBorder
+        };
+        setCell(5, totalGeneralRow, {
+            t: 's',
+            v: 'TOTAL GERAL DO MÊS',
+            s: { ...grandTotalStyle, alignment: { horizontal: 'left', vertical: 'center' } }
+        });
+        setCell(6, totalGeneralRow, {
+            t: 'n',
+            f: `SUM(G${firstSummaryDataRow}:G${lastSummaryDataRow})`,
+            v: Number(summary.totals.totalClasses || 0),
+            z: CLASSES_FMT,
+            s: { ...grandTotalStyle, alignment: { horizontal: 'center', vertical: 'center' }, numFmt: CLASSES_FMT }
+        });
+        setCell(7, totalGeneralRow, {
+            t: 's',
+            v: '-',
+            s: { ...grandTotalStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        setCell(8, totalGeneralRow, {
+            t: 'n',
+            f: `SUM(I${firstSummaryDataRow}:I${lastSummaryDataRow})`,
+            v: Number(summary.totals.totalGeneral || 0),
+            z: CURRENCY_FMT,
+            s: { ...grandTotalStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+        });
+        setCell(9, totalGeneralRow, {
+            t: 's',
+            v: 'FECHAMENTO',
+            s: { ...grandTotalStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        rowsMeta[totalGeneralRow - 1] = { hpt: 22 };
+
+        // Linha: Total Holerite (Folha CLT) com =SUMIF
+        const holeriteClassesCount = summary.summaryList
+            .filter(x => x.payment_method === 'HOLERITE')
+            .reduce((acc, cur) => acc + Number(cur.class_count || 0), 0);
+        const holeriteRowStyle = {
+            font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '1E40AF' } },
+            fill: { fgColor: { rgb: 'EFF6FF' } },
+            border: thinBorder
+        };
+        setCell(5, totalHoleriteRow, {
+            t: 's',
+            v: 'Total Holerite (Folha CLT)',
+            s: { ...holeriteRowStyle, alignment: { horizontal: 'left', vertical: 'center' } }
+        });
+        setCell(6, totalHoleriteRow, {
+            t: 'n',
+            f: `SUMIF(J${firstSummaryDataRow}:J${lastSummaryDataRow},"Holerite",G${firstSummaryDataRow}:G${lastSummaryDataRow})`,
+            v: holeriteClassesCount,
+            z: CLASSES_FMT,
+            s: { ...holeriteRowStyle, alignment: { horizontal: 'center', vertical: 'center' }, numFmt: CLASSES_FMT }
+        });
+        setCell(7, totalHoleriteRow, {
+            t: 's',
+            v: '-',
+            s: { ...holeriteRowStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        setCell(8, totalHoleriteRow, {
+            t: 'n',
+            f: `SUMIF(J${firstSummaryDataRow}:J${lastSummaryDataRow},"Holerite",I${firstSummaryDataRow}:I${lastSummaryDataRow})`,
+            v: Number(summary.totals.totalHolerite || 0),
+            z: CURRENCY_FMT,
+            s: { ...holeriteRowStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+        });
+        setCell(9, totalHoleriteRow, {
+            t: 's',
+            v: 'Holerite',
+            s: { ...holeriteRowStyle, fill: { fgColor: { rgb: 'DBEAFE' } }, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        rowsMeta[totalHoleriteRow - 1] = { hpt: 20 };
+
+        // Linha: Total Recibo (Autônomo / RPA) com =SUMIF
+        const reciboClassesCount = summary.summaryList
+            .filter(x => x.payment_method !== 'HOLERITE')
+            .reduce((acc, cur) => acc + Number(cur.class_count || 0), 0);
+        const reciboRowStyle = {
+            font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '166534' } },
+            fill: { fgColor: { rgb: 'F0FDF4' } },
+            border: thinBorder
+        };
+        setCell(5, totalReciboRow, {
+            t: 's',
+            v: 'Total Recibo (Autônomo / RPA)',
+            s: { ...reciboRowStyle, alignment: { horizontal: 'left', vertical: 'center' } }
+        });
+        setCell(6, totalReciboRow, {
+            t: 'n',
+            f: `SUMIF(J${firstSummaryDataRow}:J${lastSummaryDataRow},"Recibo",G${firstSummaryDataRow}:G${lastSummaryDataRow})`,
+            v: reciboClassesCount,
+            z: CLASSES_FMT,
+            s: { ...reciboRowStyle, alignment: { horizontal: 'center', vertical: 'center' }, numFmt: CLASSES_FMT }
+        });
+        setCell(7, totalReciboRow, {
+            t: 's',
+            v: '-',
+            s: { ...reciboRowStyle, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        setCell(8, totalReciboRow, {
+            t: 'n',
+            f: `SUMIF(J${firstSummaryDataRow}:J${lastSummaryDataRow},"Recibo",I${firstSummaryDataRow}:I${lastSummaryDataRow})`,
+            v: Number(summary.totals.totalRecibo || 0),
+            z: CURRENCY_FMT,
+            s: { ...reciboRowStyle, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: CURRENCY_FMT }
+        });
+        setCell(9, totalReciboRow, {
+            t: 's',
+            v: 'Recibo',
+            s: { ...reciboRowStyle, fill: { fgColor: { rgb: 'DCFCE7' } }, alignment: { horizontal: 'center', vertical: 'center' } }
+        });
+        rowsMeta[totalReciboRow - 1] = { hpt: 20 };
+
+        // Definir intervalo total da planilha (!ref), mesclagens (!merges), alturas (!rows) e larguras (!cols)
+        const maxRowNumber = Math.max(currentLeftRow, totalReciboRow + 1);
+        ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 9, r: maxRowNumber } });
+        ws['!merges'] = merges;
+        ws['!rows'] = rowsMeta;
         ws['!cols'] = [
-            { wch: 18 }, // A: PROFESSORA
-            { wch: 14 }, // B: DATA
-            { wch: 18 }, // C: AULA / Subtotal Qtd
-            { wch: 12 }, // D: VALOR / Subtotal R$
-            { wch: 6 },  // E: Espaço
-            { wch: 34 }, // F: Nome Completo
-            { wch: 14 }, // G: Quant. Aulas
-            { wch: 14 }, // H: Valor total
-            { wch: 14 }  // I: Obs (Holerite / Recibo)
+            { wch: 18 }, // A: PROFESSOR(A)
+            { wch: 16 }, // B: DATA DA AULA
+            { wch: 22 }, // C: MODALIDADE / Qtd Subtotal
+            { wch: 16 }, // D: VALOR (R$) / Subtotal R$
+            { wch: 5 },  // E: Espaço separador
+            { wch: 36 }, // F: Nome Completo do Professor(a) (Largo para nunca cortar)
+            { wch: 15 }, // G: Quant. Aulas
+            { wch: 15 }, // H: Valor / Aula
+            { wch: 18 }, // I: Valor Total (R$)
+            { wch: 18 }  // J: Forma Pagto (Obs.)
         ];
 
-        const wb = window.XLSX.utils.book_new();
+        const wb = XLSX.utils.book_new();
         const sheetName = `COLETIVAS_${state.currentMonth}`.slice(0, 31);
-        window.XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
-        window.XLSX.writeFile(wb, `COLETIVAS_${state.currentMonth}.xlsx`);
-        showToast('📥 Planilha Excel (.XLSX) baixada no formato oficial!', 'success');
+        XLSX.writeFile(wb, `FECHAMENTO_COLETIVAS_${state.currentMonth}.xlsx`);
+        showToast('📥 Planilha Contábil (.XLSX) formatada e com fórmulas baixada!', 'success');
     } catch (err) {
         console.error('Erro ao gerar XLSX:', err);
         exportClosureCSV();
